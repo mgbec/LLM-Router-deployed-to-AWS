@@ -1,0 +1,34 @@
+# =============================================================================
+# Example terraform.tfvars - Copy to terraform.tfvars and fill in values
+# =============================================================================
+
+region       = "us-east-1"
+environment  = "dev"
+project_name = "llm-router"
+
+# ECR image URI for the router agent (build and push your image first)
+router_agent_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/llm-router-dev-router-agent:latest"
+
+# Runtime scaling
+router_agent_min_instances = 2
+router_agent_max_instances = 50
+
+# External providers (set to true and provide API key to enable)
+enable_external_providers = false
+# openai_api_key = "sk-..."
+
+# SageMaker (set to true if you have a self-hosted model endpoint)
+enable_sagemaker_endpoint = false
+# sagemaker_endpoint_name = "my-custom-model-endpoint"
+
+# Routing defaults
+default_max_cost_per_request = 0.05
+default_max_latency_ms       = 3000
+default_quality_threshold    = 0.8
+
+# Observability
+log_retention_days     = 30
+enable_detailed_metrics = true
+
+# Networking
+network_mode = "PUBLIC"
