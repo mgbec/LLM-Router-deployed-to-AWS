@@ -134,6 +134,10 @@ resource "aws_bedrockagentcore_gateway_target" "complexity_classifier" {
   description        = "Classifies prompt complexity for routing decisions"
   gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
 
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
+
   target_configuration {
     mcp {
       lambda {
@@ -166,6 +170,10 @@ resource "aws_bedrockagentcore_gateway_target" "model_invoker" {
   name               = "model-invoker"
   description        = "Invokes the selected model and returns the response"
   gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
+
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
 
   target_configuration {
     mcp {
@@ -209,6 +217,10 @@ resource "aws_bedrockagentcore_gateway_target" "feedback_collector" {
   name               = "feedback-collector"
   description        = "Collects response quality feedback for adaptive routing"
   gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
+
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
 
   target_configuration {
     mcp {

@@ -132,7 +132,7 @@ resource "aws_sns_topic" "ai_concerns_escalation" {
   name = "${local.name_prefix}-ai-concerns-escalation"
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.3.3,A.9.5"
+    ISO42001Control = "A.3.3/A.9.5"
     Purpose         = "human-escalation"
   })
 }
@@ -199,7 +199,7 @@ resource "aws_dynamodb_table" "human_review_queue" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.9.5,A.8.5"
+    ISO42001Control = "A.9.5/A.8.5"
     Purpose         = "human-review-queue"
   })
 }

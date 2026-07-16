@@ -63,7 +63,7 @@ resource "aws_dynamodb_table" "routing_audit_log" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.8.3,A.8.4,A.7.6"
+    ISO42001Control = "A.8.3/A.8.4/A.7.6"
     Purpose         = "routing-transparency-audit"
     DataRetention   = "90-days"
   })
@@ -101,7 +101,7 @@ resource "aws_lambda_function" "transparency_api" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.8.2,A.8.3,A.8.4"
+    ISO42001Control = "A.8.2/A.8.3/A.8.4"
   })
 }
 

@@ -44,7 +44,7 @@ resource "aws_lambda_function" "data_classifier" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.7.5,A.7.6"
+    ISO42001Control = "A.7.5/A.7.6"
     Purpose         = "data-classification-and-residency"
   })
 }
@@ -144,6 +144,10 @@ resource "aws_bedrockagentcore_gateway_target" "data_classifier" {
   name               = "data-classifier"
   description        = "Classifies data sensitivity and enforces residency rules before external routing"
   gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
+
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
 
   target_configuration {
     mcp {

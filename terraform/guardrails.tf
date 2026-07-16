@@ -199,7 +199,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.9.4,A.7.5,A.9.5"
+    ISO42001Control = "A.9.4/A.7.5/A.9.5"
     Purpose         = "content-safety-and-pii-protection"
   })
 }
@@ -337,7 +337,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
   }
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.7.5,A.10.2"
+    ISO42001Control = "A.7.5/A.10.2"
     Purpose         = "external-provider-data-governance"
   })
 }

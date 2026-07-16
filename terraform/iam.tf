@@ -38,6 +38,26 @@ resource "aws_iam_role_policy" "agentcore_runtime_bedrock" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ECRAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRImagePull"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchCheckLayerAvailability"
+        ]
+        Resource = [
+          aws_ecr_repository.router_agent.arn
+        ]
+      },
+      {
         Sid    = "InvokeBedrockModels"
         Effect = "Allow"
         Action = [
@@ -275,7 +295,8 @@ resource "aws_iam_role_policy" "agentcore_gateway_lambda" {
         Resource = [
           aws_lambda_function.complexity_classifier.arn,
           aws_lambda_function.model_invoker.arn,
-          aws_lambda_function.feedback_collector.arn
+          aws_lambda_function.feedback_collector.arn,
+          aws_lambda_function.data_classifier.arn
         ]
       }
     ]
@@ -370,13 +391,6 @@ resource "aws_iam_role_policy" "lambda_model_invoker_bedrock" {
         Resource = [
           "arn:${local.partition}:bedrock:${local.region}::foundation-model/*"
         ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = var.enable_external_providers ? [aws_secretsmanager_secret.openai_api_key[0].arn] : []
       }
     ]
   })

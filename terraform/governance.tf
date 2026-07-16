@@ -18,7 +18,7 @@ resource "aws_s3_bucket" "governance_docs" {
   bucket = "${local.name_prefix}-governance-docs-${local.account_id}"
 
   tags = merge(local.common_tags, {
-    ISO42001Control = "A.2.2,A.5.2,A.5.3,A.6.2.9"
+    ISO42001Control = "A.2.2/A.5.2/A.5.3/A.6.2.9"
     Purpose         = "aims-governance-documentation"
   })
 }

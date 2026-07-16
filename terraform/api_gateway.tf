@@ -79,36 +79,8 @@ resource "aws_apigatewayv2_route" "routing_status" {
 }
 
 # -----------------------------------------------------------------------------
-# Stage
+# Stage - managed by auto_deploy on the API resource
 # -----------------------------------------------------------------------------
-
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.router.id
-  name        = "$default"
-  auto_deploy = true
-
-  default_route_settings {
-    throttling_burst_limit = 100
-    throttling_rate_limit  = 50
-  }
-
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
-    format = jsonencode({
-      requestId      = "$context.requestId"
-      ip             = "$context.identity.sourceIp"
-      requestTime    = "$context.requestTime"
-      httpMethod     = "$context.httpMethod"
-      routeKey       = "$context.routeKey"
-      status         = "$context.status"
-      protocol       = "$context.protocol"
-      responseLength = "$context.responseLength"
-      integrationLatency = "$context.integrationLatency"
-    })
-  }
-
-  tags = local.common_tags
-}
 
 resource "aws_cloudwatch_log_group" "api_gateway" {
   name              = "/aws/apigateway/${local.name_prefix}-api"

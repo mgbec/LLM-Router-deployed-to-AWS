@@ -100,28 +100,6 @@ resource "aws_xray_sampling_rule" "classifier" {
 }
 
 # -----------------------------------------------------------------------------
-# Enable X-Ray on API Gateway Stage
-# This propagates the trace ID from the client through all downstream services
-# -----------------------------------------------------------------------------
-
-resource "aws_apigatewayv2_stage" "xray_settings" {
-  # This uses a lifecycle ignore to avoid conflict with the default stage
-  # The actual X-Ray setting is applied via the route settings below
-  api_id = aws_apigatewayv2_api.router.id
-  name   = "$default"
-
-  # Note: aws_apigatewayv2_stage doesn't have a native xray field for HTTP APIs.
-  # X-Ray propagation works automatically when:
-  #   1. The Lambda functions have active tracing (already configured)
-  #   2. The AWS SDK calls propagate the trace header
-  # The sampling rules above control what gets captured.
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
-
-# -----------------------------------------------------------------------------
 # IAM: Allow Lambda functions to write X-Ray segments
 # (AWSLambdaBasicExecutionRole already includes xray:PutTraceSegments via
 #  the managed policy, but we add explicit X-Ray permissions for completeness)
