@@ -107,8 +107,9 @@ Note: Terraform creates the ECR repository automatically. You don't need to prov
 
 ```bash
 aws cognito-idp admin-create-user \
+  --region us-east-1 \
   --user-pool-id $(terraform output -raw cognito_user_pool_id) \
-  --username user@example.com \
+  --username testuser \
   --user-attributes Name=email,Value=user@example.com \
   --temporary-password 'TempPass123!'
 ```
