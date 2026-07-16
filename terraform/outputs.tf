@@ -22,7 +22,7 @@ output "chat_completions_url" {
 
 output "agentcore_runtime_arn" {
   description = "ARN of the AgentCore Runtime hosting the router agent"
-  value       = aws_bedrockagentcore_agent_runtime.router.arn
+  value       = aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
 }
 
 output "agentcore_gateway_url" {
@@ -32,7 +32,7 @@ output "agentcore_gateway_url" {
 
 output "agentcore_gateway_id" {
   description = "ID of the AgentCore Gateway"
-  value       = aws_bedrockagentcore_gateway.router.id
+  value       = aws_bedrockagentcore_gateway.router.gateway_id
 }
 
 # -----------------------------------------------------------------------------

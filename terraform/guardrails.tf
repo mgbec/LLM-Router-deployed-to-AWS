@@ -23,42 +23,42 @@ resource "aws_bedrock_guardrail" "router_safety" {
   # Content Filters - Block harmful content in both prompts and responses
   # ---------------------------------------------------------------------------
   content_policy_config {
-    filters_configs {
+    filters_config {
       type            = "HATE"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "INSULTS"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "SEXUAL"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "VIOLENCE"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "MISCONDUCT"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "PROMPT_ATTACK"
       input_strength  = "HIGH"
       output_strength = "NONE"
@@ -72,7 +72,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
   # Prevents PII from being sent to external providers
   # ---------------------------------------------------------------------------
   sensitive_information_policy_config {
-    pii_entities_configs {
+    pii_entities_config {
       type          = "EMAIL"
       action        = "ANONYMIZE"
       input_action  = "ANONYMIZE"
@@ -80,7 +80,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "PHONE"
       action        = "ANONYMIZE"
       input_action  = "ANONYMIZE"
@@ -88,7 +88,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "NAME"
       action        = "ANONYMIZE"
       input_action  = "ANONYMIZE"
@@ -96,7 +96,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "US_SOCIAL_SECURITY_NUMBER"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -104,7 +104,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "CREDIT_DEBIT_CARD_NUMBER"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -112,7 +112,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "AWS_ACCESS_KEY"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -120,7 +120,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "AWS_SECRET_KEY"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -130,7 +130,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
     }
 
     # Custom regex for internal identifiers
-    regexes_configs {
+    regexes_config {
       name          = "internal_account_id"
       description   = "Blocks internal account identifiers from being sent to external models"
       pattern       = "ACCT-[A-Z0-9]{8,12}"
@@ -146,7 +146,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
   # Topic Policy - Block prohibited use cases
   # ---------------------------------------------------------------------------
   topic_policy_config {
-    topics_configs {
+    topics_config {
       name       = "medical_diagnosis"
       definition = "Requests for medical diagnoses, treatment plans, or health advice that could replace professional medical consultation"
       type       = "DENY"
@@ -155,7 +155,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
         "Diagnose my symptoms: fever, cough, headache"
       ]
     }
-    topics_configs {
+    topics_config {
       name       = "legal_advice"
       definition = "Requests for specific legal advice, case strategy, or legal opinions that could replace professional legal counsel"
       type       = "DENY"
@@ -164,7 +164,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
         "Write a legally binding contract for my business"
       ]
     }
-    topics_configs {
+    topics_config {
       name       = "financial_advice"
       definition = "Specific investment recommendations, financial planning advice, or trading strategies that could constitute regulated financial advice"
       type       = "DENY"
@@ -179,7 +179,7 @@ resource "aws_bedrock_guardrail" "router_safety" {
   # Word Filters - Block profanity and known harmful patterns
   # ---------------------------------------------------------------------------
   word_policy_config {
-    managed_word_lists_configs {
+    managed_word_lists_config {
       type = "PROFANITY"
     }
   }
@@ -188,11 +188,11 @@ resource "aws_bedrock_guardrail" "router_safety" {
   # Contextual Grounding - Reduce hallucination in responses
   # ---------------------------------------------------------------------------
   contextual_grounding_policy_config {
-    filters_configs {
+    filters_config {
       type      = "GROUNDING"
       threshold = 0.7
     }
-    filters_configs {
+    filters_config {
       type      = "RELEVANCE"
       threshold = 0.7
     }
@@ -224,7 +224,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
 
   # Stricter PII policy - BLOCK everything for external routing
   sensitive_information_policy_config {
-    pii_entities_configs {
+    pii_entities_config {
       type          = "EMAIL"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -232,7 +232,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "PHONE"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -240,7 +240,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "NAME"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -248,7 +248,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "ADDRESS"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -256,7 +256,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "US_SOCIAL_SECURITY_NUMBER"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -264,7 +264,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "CREDIT_DEBIT_CARD_NUMBER"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -272,7 +272,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "IP_ADDRESS"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -280,7 +280,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "AWS_ACCESS_KEY"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -288,7 +288,7 @@ resource "aws_bedrock_guardrail" "external_routing" {
       input_enabled = true
       output_enabled = true
     }
-    pii_entities_configs {
+    pii_entities_config {
       type          = "AWS_SECRET_KEY"
       action        = "BLOCK"
       input_action  = "BLOCK"
@@ -299,35 +299,35 @@ resource "aws_bedrock_guardrail" "external_routing" {
   }
 
   content_policy_config {
-    filters_configs {
+    filters_config {
       type            = "HATE"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "SEXUAL"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "VIOLENCE"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "MISCONDUCT"
       input_strength  = "HIGH"
       output_strength = "HIGH"
       input_action    = "BLOCK"
       output_action   = "BLOCK"
     }
-    filters_configs {
+    filters_config {
       type            = "PROMPT_ATTACK"
       input_strength  = "HIGH"
       output_strength = "NONE"

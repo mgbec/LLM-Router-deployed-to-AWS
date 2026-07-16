@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # LLM Router - Deployment Script
-# Builds and pushes the router agent image, then applies Terraform
+# Applies Terraform (creates ECR + infra), then builds and pushes the agent image
 # =============================================================================
 
 set -euo pipefail
@@ -31,36 +31,35 @@ info "Region: ${REGION}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 info "AWS Account: ${ACCOUNT_ID}"
 
-# Step 2: Set ECR repository
-ECR_REPO="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-router-agent"
-
-# Step 3: Authenticate Docker to ECR
-info "Authenticating Docker to ECR..."
-aws ecr get-login-password --region "${REGION}" | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
-
-# Step 4: Build the router agent image
-info "Building router agent image..."
-docker build -t "${PROJECT_NAME}-router-agent:latest" "${PROJECT_ROOT}/agent"
-
-# Step 5: Tag and push
-info "Pushing image to ECR..."
-docker tag "${PROJECT_NAME}-router-agent:latest" "${ECR_REPO}:latest"
-docker push "${ECR_REPO}:latest"
-
-IMAGE_URI="${ECR_REPO}:latest"
-info "Image pushed: ${IMAGE_URI}"
-
-# Step 6: Apply Terraform
-info "Applying Terraform..."
+# Step 2: Apply Terraform first (creates ECR repo + all infrastructure)
+info "Applying Terraform (creates ECR repository and infrastructure)..."
 cd "${PROJECT_ROOT}/terraform"
 
 terraform init -upgrade
 
 terraform apply \
-  -var "router_agent_image_uri=${IMAGE_URI}" \
   -var "region=${REGION}" \
   -var "environment=${ENVIRONMENT}" \
+  -var "router_agent_image_tag=latest" \
   -auto-approve
+
+# Step 3: Get the ECR repository URL from Terraform output
+ECR_REPO=$(terraform output -raw ecr_repository_url)
+info "ECR Repository: ${ECR_REPO}"
+
+# Step 4: Authenticate Docker to ECR
+info "Authenticating Docker to ECR..."
+aws ecr get-login-password --region "${REGION}" | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+
+# Step 5: Build the router agent image
+info "Building router agent image..."
+docker build -t "${PROJECT_NAME}-router-agent:latest" "${PROJECT_ROOT}/agent"
+
+# Step 6: Tag and push
+info "Pushing image to ECR..."
+docker tag "${PROJECT_NAME}-router-agent:latest" "${ECR_REPO}:latest"
+docker push "${ECR_REPO}:latest"
+info "Image pushed: ${ECR_REPO}:latest"
 
 # Step 7: Print outputs
 info "Deployment complete!"
@@ -70,4 +69,5 @@ echo "  LLM Router - Deployment Outputs"
 echo "========================================="
 terraform output
 echo ""
+info "Note: AgentCore Runtime will pull the image and become READY shortly."
 info "To test: curl -X POST \$(terraform output -raw chat_completions_url) -H 'Authorization: Bearer <token>' -H 'Content-Type: application/json' -d '{\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'"

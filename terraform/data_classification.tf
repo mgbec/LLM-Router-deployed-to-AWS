@@ -141,41 +141,38 @@ resource "aws_dynamodb_table" "data_flow_log" {
 # -----------------------------------------------------------------------------
 
 resource "aws_bedrockagentcore_gateway_target" "data_classifier" {
-  name        = "data-classifier"
-  description = "Classifies data sensitivity and enforces residency rules before external routing"
-  gateway_id  = aws_bedrockagentcore_gateway.router.id
+  name               = "data-classifier"
+  description        = "Classifies data sensitivity and enforces residency rules before external routing"
+  gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
 
   target_configuration {
-    lambda_target {
-      lambda_arn = aws_lambda_function.data_classifier.arn
-      tool_schema {
-        inline_payload = jsonencode({
-          tools = [
-            {
-              name        = "classify_data_sensitivity"
-              description = "Scan a prompt for sensitive data and determine if it can be routed to external providers"
-              inputSchema = {
-                type = "object"
-                properties = {
-                  prompt = {
-                    type        = "string"
-                    description = "The user prompt to classify"
-                  }
-                  target_provider = {
-                    type        = "string"
-                    description = "The intended target provider"
-                    enum        = ["bedrock", "sagemaker", "external"]
-                  }
-                  request_id = {
-                    type        = "string"
-                    description = "Request ID for audit logging"
-                  }
-                }
-                required = ["prompt", "target_provider"]
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.data_classifier.arn
+        tool_schema {
+          inline_payload {
+            name        = "classify_data_sensitivity"
+            description = "Scan a prompt for sensitive data and determine if it can be routed to external providers"
+            input_schema {
+              type = "object"
+              property {
+                name        = "prompt"
+                type        = "string"
+                description = "The user prompt to classify"
+              }
+              property {
+                name        = "target_provider"
+                type        = "string"
+                description = "The intended target provider (bedrock, sagemaker, external)"
+              }
+              property {
+                name        = "request_id"
+                type        = "string"
+                description = "Request ID for audit logging"
               }
             }
-          ]
-        })
+          }
+        }
       }
     }
   }

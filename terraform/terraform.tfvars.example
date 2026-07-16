@@ -6,8 +6,9 @@ region       = "us-east-1"
 environment  = "dev"
 project_name = "llm-router"
 
-# ECR image URI for the router agent (build and push your image first)
-router_agent_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/llm-router-dev-router-agent:latest"
+# ECR image tag for the router agent (repo is created by Terraform automatically)
+# Push your image to the ECR repo output by `terraform output ecr_repository_url`
+router_agent_image_tag = "latest"
 
 # Runtime scaling
 router_agent_min_instances = 2

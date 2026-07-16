@@ -29,9 +29,10 @@ variable "project_name" {
 # AgentCore Runtime
 # -----------------------------------------------------------------------------
 
-variable "router_agent_image_uri" {
-  description = "ECR image URI for the router agent container"
+variable "router_agent_image_tag" {
+  description = "Docker image tag for the router agent (the ECR repo is created by Terraform)"
   type        = string
+  default     = "latest"
 }
 
 variable "router_agent_min_instances" {

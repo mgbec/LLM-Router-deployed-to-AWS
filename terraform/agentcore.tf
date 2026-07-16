@@ -48,13 +48,13 @@ resource "aws_ecr_lifecycle_policy" "router_agent" {
 # -----------------------------------------------------------------------------
 
 resource "aws_bedrockagentcore_agent_runtime" "router" {
-  agent_runtime_name = "${local.name_prefix}-router"
+  agent_runtime_name = replace("${local.name_prefix}_router", "-", "_")
   description        = "LLM Router Agent - classifies requests and routes to optimal model"
   role_arn           = aws_iam_role.agentcore_runtime.arn
 
   agent_runtime_artifact {
     container_configuration {
-      container_uri = var.router_agent_image_uri
+      container_uri = "${aws_ecr_repository.router_agent.repository_url}:${var.router_agent_image_tag}"
     }
   }
 
@@ -130,133 +130,129 @@ resource "aws_bedrockagentcore_gateway" "router" {
 # -----------------------------------------------------------------------------
 
 resource "aws_bedrockagentcore_gateway_target" "complexity_classifier" {
-  name        = "complexity-classifier"
-  description = "Classifies prompt complexity for routing decisions"
-  gateway_id  = aws_bedrockagentcore_gateway.router.id
+  name               = "complexity-classifier"
+  description        = "Classifies prompt complexity for routing decisions"
+  gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
 
   target_configuration {
-    lambda_target {
-      lambda_arn = aws_lambda_function.complexity_classifier.arn
-      tool_schema {
-        inline_payload = jsonencode({
-          tools = [
-            {
-              name        = "classify_complexity"
-              description = "Analyze a prompt and classify its complexity as simple, moderate, complex, or specialized"
-              inputSchema = {
-                type = "object"
-                properties = {
-                  prompt = {
-                    type        = "string"
-                    description = "The user prompt to classify"
-                  }
-                  context = {
-                    type        = "object"
-                    description = "Additional context about the request"
-                  }
-                }
-                required = ["prompt"]
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.complexity_classifier.arn
+        tool_schema {
+          inline_payload {
+            name        = "classify_complexity"
+            description = "Analyze a prompt and classify its complexity as simple, moderate, complex, or specialized"
+            input_schema {
+              type = "object"
+              property {
+                name        = "prompt"
+                type        = "string"
+                description = "The user prompt to classify"
+              }
+              property {
+                name        = "context"
+                type        = "string"
+                description = "Additional context about the request"
               }
             }
-          ]
-        })
+          }
+        }
       }
     }
   }
 }
 
 resource "aws_bedrockagentcore_gateway_target" "model_invoker" {
-  name        = "model-invoker"
-  description = "Invokes the selected model and returns the response"
-  gateway_id  = aws_bedrockagentcore_gateway.router.id
+  name               = "model-invoker"
+  description        = "Invokes the selected model and returns the response"
+  gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
 
   target_configuration {
-    lambda_target {
-      lambda_arn = aws_lambda_function.model_invoker.arn
-      tool_schema {
-        inline_payload = jsonencode({
-          tools = [
-            {
-              name        = "invoke_model"
-              description = "Invoke a specific model with the given prompt and parameters"
-              inputSchema = {
-                type = "object"
-                properties = {
-                  model_id = {
-                    type        = "string"
-                    description = "The model identifier to invoke"
-                  }
-                  provider = {
-                    type        = "string"
-                    description = "The provider (bedrock, sagemaker, external)"
-                    enum        = ["bedrock", "sagemaker", "external"]
-                  }
-                  messages = {
-                    type        = "array"
-                    description = "Messages array for the model"
-                  }
-                  parameters = {
-                    type        = "object"
-                    description = "Model invocation parameters (temperature, max_tokens, etc.)"
-                  }
-                }
-                required = ["model_id", "provider", "messages"]
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.model_invoker.arn
+        tool_schema {
+          inline_payload {
+            name        = "invoke_model"
+            description = "Invoke a specific model with the given prompt and parameters"
+            input_schema {
+              type = "object"
+              property {
+                name        = "model_id"
+                type        = "string"
+                description = "The model identifier to invoke"
+              }
+              property {
+                name        = "provider"
+                type        = "string"
+                description = "The provider (bedrock, sagemaker, external)"
+              }
+              property {
+                name        = "messages"
+                type        = "string"
+                description = "JSON-encoded messages array for the model"
+              }
+              property {
+                name        = "parameters"
+                type        = "string"
+                description = "JSON-encoded model invocation parameters (temperature, max_tokens, etc.)"
               }
             }
-          ]
-        })
+          }
+        }
       }
     }
   }
 }
 
 resource "aws_bedrockagentcore_gateway_target" "feedback_collector" {
-  name        = "feedback-collector"
-  description = "Collects response quality feedback for adaptive routing"
-  gateway_id  = aws_bedrockagentcore_gateway.router.id
+  name               = "feedback-collector"
+  description        = "Collects response quality feedback for adaptive routing"
+  gateway_identifier = aws_bedrockagentcore_gateway.router.gateway_id
 
   target_configuration {
-    lambda_target {
-      lambda_arn = aws_lambda_function.feedback_collector.arn
-      tool_schema {
-        inline_payload = jsonencode({
-          tools = [
-            {
-              name        = "record_feedback"
-              description = "Record quality feedback for a routing decision"
-              inputSchema = {
-                type = "object"
-                properties = {
-                  request_id = {
-                    type        = "string"
-                    description = "The unique request identifier"
-                  }
-                  model_id = {
-                    type        = "string"
-                    description = "The model that was invoked"
-                  }
-                  latency_ms = {
-                    type        = "number"
-                    description = "Response latency in milliseconds"
-                  }
-                  quality_score = {
-                    type        = "number"
-                    description = "Quality score (0.0 to 1.0)"
-                  }
-                  cost = {
-                    type        = "number"
-                    description = "Estimated cost of the request"
-                  }
-                  escalated = {
-                    type        = "boolean"
-                    description = "Whether the request was escalated to a higher-tier model"
-                  }
-                }
-                required = ["request_id", "model_id", "latency_ms"]
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.feedback_collector.arn
+        tool_schema {
+          inline_payload {
+            name        = "record_feedback"
+            description = "Record quality feedback for a routing decision"
+            input_schema {
+              type = "object"
+              property {
+                name        = "request_id"
+                type        = "string"
+                description = "The unique request identifier"
+              }
+              property {
+                name        = "model_id"
+                type        = "string"
+                description = "The model that was invoked"
+              }
+              property {
+                name        = "latency_ms"
+                type        = "number"
+                description = "Response latency in milliseconds"
+              }
+              property {
+                name        = "quality_score"
+                type        = "number"
+                description = "Quality score (0.0 to 1.0)"
+              }
+              property {
+                name        = "cost"
+                type        = "number"
+                description = "Estimated cost of the request"
+              }
+              property {
+                name        = "escalated"
+                type        = "boolean"
+                description = "Whether the request was escalated to a higher-tier model"
               }
             }
-          ]
-        })
+          }
+        }
       }
     }
   }

@@ -71,7 +71,7 @@ resource "aws_cloudwatch_metric_alarm" "high_latency" {
   metric_name         = "RoutingLatency"
   namespace           = "LLMRouter/${var.environment}"
   period              = 60
-  statistic           = "p99"
+  extended_statistic  = "p99"
   threshold           = 5000
   alarm_description   = "P99 routing latency exceeded 5s"
   alarm_actions       = [aws_sns_topic.router_alerts.arn]

@@ -141,7 +141,7 @@ resource "aws_lambda_function" "api_proxy" {
 
   environment {
     variables = {
-      AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.router.arn
+      AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
       REGION                = local.region
     }
   }
@@ -194,7 +194,7 @@ resource "aws_iam_role_policy" "lambda_api_proxy_agentcore" {
           "bedrock-agentcore:InvokeAgentRuntime"
         ]
         Resource = [
-          aws_bedrockagentcore_agent_runtime.router.arn
+          aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
         ]
       }
     ]
