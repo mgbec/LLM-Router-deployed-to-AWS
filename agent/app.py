@@ -35,7 +35,7 @@ KILL_SWITCH_PROFILE = os.environ.get("KILL_SWITCH_PROFILE", "")
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 kinesis = boto3.client("kinesis", region_name=REGION)
-appconfig = boto3.client("appconfigdata", region_name=REGION)
+appconfig_client = boto3.client("appconfigdata", region_name=REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=REGION)
 
 # Tables
@@ -51,8 +51,8 @@ MODEL_COSTS = {
     "us.meta.llama4-maverick-17b-instruct-v1:0": 0.0002,
 }
 
-# Model tier mapping
-MODEL_TIERS = {
+# Static model tier mapping (used as fallback if AppConfig unavailable)
+DEFAULT_MODEL_TIERS = {
     "simple": [
         "us.amazon.nova-lite-v1:0",
     ],
@@ -73,6 +73,141 @@ MODEL_TIERS = {
 circuit_breakers: dict[str, dict] = {}
 FAILURE_THRESHOLD = 3
 RECOVERY_TIMEOUT_S = 60
+
+
+# =============================================================================
+# AppConfig Hot-Swap Integration
+# =============================================================================
+
+class AppConfigManager:
+    """
+    Manages live configuration from AWS AppConfig.
+    Polls for updates with caching to avoid per-request latency.
+    """
+
+    def __init__(self):
+        self._routing_token = None
+        self._kill_switch_token = None
+        self._routing_config = None
+        self._kill_switch_config = None
+        self._last_fetch = 0
+        self._cache_ttl_seconds = 30  # Poll every 30 seconds
+
+    def _start_session(self, profile_id: str) -> str:
+        """Start a configuration session and return the initial token."""
+        try:
+            response = appconfig_client.start_configuration_session(
+                ApplicationIdentifier=APPCONFIG_APP_ID,
+                EnvironmentIdentifier=APPCONFIG_ENV_ID,
+                ConfigurationProfileIdentifier=profile_id,
+                RequiredMinimumPollIntervalInSeconds=15
+            )
+            return response["InitialConfigurationToken"]
+        except Exception as e:
+            logger.warning(f"Failed to start AppConfig session for {profile_id}: {e}")
+            return None
+
+    def _fetch_config(self, token: str) -> tuple:
+        """Fetch latest config using the token. Returns (config_dict, next_token)."""
+        try:
+            response = appconfig_client.get_latest_configuration(
+                ConfigurationToken=token
+            )
+            next_token = response["NextPollConfigurationToken"]
+            content = response["Configuration"].read()
+            if content:
+                config = json.loads(content)
+                return config, next_token
+            # Empty content means no change since last poll
+            return None, next_token
+        except Exception as e:
+            logger.warning(f"Failed to fetch AppConfig: {e}")
+            return None, None
+
+    def get_routing_config(self) -> dict:
+        """Get current routing feature flags."""
+        now = time.time()
+
+        # Return cached if fresh
+        if self._routing_config and (now - self._last_fetch) < self._cache_ttl_seconds:
+            return self._routing_config
+
+        # Initialize session if needed
+        if not self._routing_token and APPCONFIG_PROFILE_ID:
+            self._routing_token = self._start_session(APPCONFIG_PROFILE_ID)
+
+        # Fetch latest
+        if self._routing_token:
+            config, next_token = self._fetch_config(self._routing_token)
+            if config:
+                self._routing_config = config
+            if next_token:
+                self._routing_token = next_token
+            self._last_fetch = now
+
+        return self._routing_config or {}
+
+    def get_kill_switch_config(self) -> dict:
+        """Get current kill switch feature flags."""
+        if not self._kill_switch_token and KILL_SWITCH_PROFILE:
+            self._kill_switch_token = self._start_session(KILL_SWITCH_PROFILE)
+
+        if self._kill_switch_token:
+            config, next_token = self._fetch_config(self._kill_switch_token)
+            if config:
+                self._kill_switch_config = config
+            if next_token:
+                self._kill_switch_token = next_token
+
+        return self._kill_switch_config or {}
+
+    def is_system_active(self) -> bool:
+        """Check if the system kill switch is engaged."""
+        config = self.get_kill_switch_config()
+        values = config.get("values", {})
+        return values.get("system_active", {}).get("enabled", True)
+
+    def is_model_enabled(self, model_id: str) -> bool:
+        """Check if a specific model is enabled via feature flags."""
+        config = self.get_routing_config()
+        values = config.get("values", {})
+
+        # Map model IDs to feature flag names
+        model_flag_map = {
+            "us.amazon.nova-lite-v1:0": "enable_nova_lite",
+            "us.amazon.nova-pro-v1:0": "enable_nova_pro",
+            "us.anthropic.claude-sonnet-4-6": "enable_claude_sonnet",
+            "us.anthropic.claude-opus-4-6-v1": "enable_claude_opus",
+        }
+
+        flag_name = model_flag_map.get(model_id)
+        if flag_name:
+            return values.get(flag_name, {}).get("enabled", True)
+        return True  # Unknown models default to enabled
+
+    def get_cascade_config(self) -> dict:
+        """Get cascade/escalation configuration."""
+        config = self.get_routing_config()
+        values = config.get("values", {})
+        return values.get("cascade_enabled", {"enabled": True, "confidence_threshold": 0.75})
+
+    def get_circuit_breaker_config(self) -> dict:
+        """Get circuit breaker thresholds."""
+        config = self.get_routing_config()
+        values = config.get("values", {})
+        return values.get("circuit_breaker", {"failure_threshold": 3, "recovery_timeout_secs": 60})
+
+    def get_active_model_tiers(self) -> dict:
+        """Build model tiers filtered by enabled flags."""
+        tiers = {}
+        for tier_name, models in DEFAULT_MODEL_TIERS.items():
+            enabled_models = [m for m in models if self.is_model_enabled(m)]
+            tiers[tier_name] = enabled_models if enabled_models else [DEFAULT_FALLBACK_MODEL]
+        return tiers
+
+
+# Global AppConfig manager instance
+config_manager = AppConfigManager()
 
 
 # =============================================================================
@@ -295,12 +430,16 @@ def _record_success(model_id: str):
 
 def _record_failure(model_id: str):
     """Record failed invocation for circuit breaker."""
+    cb_config = config_manager.get_circuit_breaker_config()
+    threshold = int(cb_config.get("failure_threshold", FAILURE_THRESHOLD))
+    timeout = int(cb_config.get("recovery_timeout_secs", RECOVERY_TIMEOUT_S))
+
     cb = circuit_breakers.setdefault(model_id, {"state": "closed", "failures": 0})
     cb["failures"] = cb.get("failures", 0) + 1
-    if cb["failures"] >= FAILURE_THRESHOLD:
+    if cb["failures"] >= threshold:
         cb["state"] = "open"
-        cb["recovery_at"] = time.time() + RECOVERY_TIMEOUT_S
-        logger.warning(f"Circuit breaker OPEN for {model_id}")
+        cb["recovery_at"] = time.time() + timeout
+        logger.warning(f"Circuit breaker OPEN for {model_id} (failures: {cb['failures']}, threshold: {threshold})")
 
 
 # =============================================================================
@@ -357,13 +496,26 @@ async def invoke(request: Request):
                 complexity = "moderate"
                 classification_method = "fallback"
 
-        # Step 2: Select model based on complexity and policy
+        # Step 2: Check kill switch
+        if not config_manager.is_system_active():
+            return JSONResponse(content={
+                "content": "System is currently disabled by operator. Please try again later.",
+                "model_id": None,
+                "provider": None,
+                "complexity": complexity,
+                "system_disabled": True,
+                "request_id": request_id
+            })
+
+        # Step 3: Select model based on complexity and policy
         policy_id = routing_hints.get("policy", "default")
         policy = _load_policy(policy_id)
         max_cost = routing_hints.get("max_cost") or policy.get("max_cost_per_request", 0.05)
         is_async = routing_hints.get("async", False)
         
-        candidates = MODEL_TIERS.get(complexity, MODEL_TIERS["moderate"])
+        # Get model tiers filtered by AppConfig enabled flags
+        active_tiers = config_manager.get_active_model_tiers()
+        candidates = active_tiers.get(complexity, active_tiers.get("moderate", [DEFAULT_FALLBACK_MODEL]))
         
         # For sync requests, skip slow models (Opus) to avoid API Gateway timeout
         if not is_async:

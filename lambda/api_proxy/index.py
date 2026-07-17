@@ -306,12 +306,12 @@ def _should_use_async(prompt: str) -> bool:
     prompt_lower = prompt.lower()
     indicator_count = sum(1 for ind in complex_indicators if ind in prompt_lower)
 
-    # Multiple complexity indicators + long prompt = async
-    if indicator_count >= 2 and word_count > 30:
+    # Multiple complexity indicators + moderate-length prompt = async
+    if indicator_count >= 2 and word_count > 20:
         return True
 
     # Very long prompts with technical keywords
-    if word_count > 80 and indicator_count >= 1:
+    if word_count > 50 and indicator_count >= 1:
         return True
 
     return False

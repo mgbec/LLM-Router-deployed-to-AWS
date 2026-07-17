@@ -8,6 +8,7 @@ import json
 import os
 import logging
 import time
+from decimal import Decimal
 import boto3
 
 logger = logging.getLogger()
@@ -64,6 +65,8 @@ def handler(event, context):
 
         # Write completed result to DynamoDB
         if table:
+            # Convert floats to Decimal for DynamoDB
+            clean_response = json.loads(json.dumps(agent_response), parse_float=Decimal)
             table.update_item(
                 Key={"request_id": request_id},
                 UpdateExpression="SET #s = :s, completed_at = :t, #r = :r",
@@ -71,7 +74,7 @@ def handler(event, context):
                 ExpressionAttributeValues={
                     ":s": "completed",
                     ":t": int(time.time()),
-                    ":r": agent_response
+                    ":r": clean_response
                 }
             )
 
