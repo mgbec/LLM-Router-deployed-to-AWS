@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 REGION = os.environ.get("REGION", "us-east-1")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
 CLASSIFIER_MODEL_ID = os.environ.get("CLASSIFIER_MODEL_ID", "us.amazon.nova-lite-v1:0")
-DEFAULT_FALLBACK_MODEL = os.environ.get("DEFAULT_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0")
+DEFAULT_FALLBACK_MODEL = os.environ.get("DEFAULT_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
 POLICY_TABLE = os.environ.get("ROUTING_POLICY_TABLE", "")
 METRICS_TABLE = os.environ.get("ROUTING_METRICS_TABLE", "")
 KINESIS_STREAM = os.environ.get("KINESIS_STREAM_NAME", "")
@@ -46,7 +46,7 @@ MODEL_COSTS = {
     "us.amazon.nova-lite-v1:0": 0.00006,
     "us.amazon.nova-pro-v1:0": 0.0008,
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": 0.0008,
-    "us.anthropic.claude-sonnet-4-20250514-v1:0": 0.003,
+    "us.anthropic.claude-sonnet-4-6": 0.003,
     "us.anthropic.claude-opus-4-6-v1": 0.015,
     "us.meta.llama4-maverick-17b-instruct-v1:0": 0.0002,
 }
@@ -58,14 +58,14 @@ MODEL_TIERS = {
     ],
     "moderate": [
         "us.amazon.nova-pro-v1:0",
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "us.anthropic.claude-sonnet-4-6",
     ],
     "complex": [
         "us.anthropic.claude-opus-4-6-v1",
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "us.anthropic.claude-sonnet-4-6",
     ],
     "specialized": [
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "us.anthropic.claude-sonnet-4-6",
     ],
 }
 

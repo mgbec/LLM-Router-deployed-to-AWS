@@ -77,7 +77,7 @@ resource "aws_bedrockagentcore_agent_runtime" "router" {
     APPCONFIG_ENV_ID         = aws_appconfig_environment.router.environment_id
     APPCONFIG_PROFILE_ID     = aws_appconfig_configuration_profile.routing_config.configuration_profile_id
     CLASSIFIER_MODEL_ID      = "us.amazon.nova-lite-v1:0"
-    DEFAULT_FALLBACK_MODEL   = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    DEFAULT_FALLBACK_MODEL   = "us.anthropic.claude-sonnet-4-6"
     ENABLE_EXTERNAL_PROVIDERS = tostring(var.enable_external_providers)
     GATEWAY_URL              = aws_bedrockagentcore_gateway.router.gateway_url
     LOG_GROUP_NAME           = aws_cloudwatch_log_group.router_agent.name
