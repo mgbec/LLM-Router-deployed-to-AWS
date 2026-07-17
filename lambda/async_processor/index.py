@@ -17,9 +17,11 @@ logger.setLevel(logging.INFO)
 REGION = os.environ.get("REGION", "us-east-1")
 AGENTCORE_RUNTIME_ARN = os.environ.get("AGENTCORE_RUNTIME_ARN", "")
 REQUESTS_TABLE = os.environ.get("REQUESTS_TABLE", "")
+KINESIS_STREAM = os.environ.get("KINESIS_STREAM_NAME", "")
 
 agentcore = boto3.client("bedrock-agentcore", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
+kinesis = boto3.client("kinesis", region_name=REGION)
 table = dynamodb.Table(REQUESTS_TABLE) if REQUESTS_TABLE else None
 
 
@@ -79,6 +81,30 @@ def handler(event, context):
             )
 
         logger.info(f"Async request {request_id} completed successfully")
+
+        # Emit routing event to Kinesis for metrics and weight adjustment
+        if KINESIS_STREAM:
+            try:
+                model_id = agent_response.get("model_id", "unknown")
+                kinesis.put_record(
+                    StreamName=KINESIS_STREAM,
+                    Data=json.dumps({
+                        "request_id": request_id,
+                        "model_id": model_id,
+                        "complexity": agent_response.get("complexity", "complex"),
+                        "latency_ms": agent_response.get("latency_ms", 0),
+                        "cost": agent_response.get("cost", 0),
+                        "quality_score": agent_response.get("quality_score", 0),
+                        "input_tokens": agent_response.get("input_tokens", 0),
+                        "output_tokens": agent_response.get("output_tokens", 0),
+                        "async": True,
+                        "policy_id": payload.get("routing", {}).get("policy", "default"),
+                    }).encode("utf-8"),
+                    PartitionKey=model_id
+                )
+            except Exception as kinesis_err:
+                logger.warning(f"Failed to emit Kinesis event: {kinesis_err}")
+
         return {"status": "completed", "request_id": request_id}
 
     except Exception as e:

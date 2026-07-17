@@ -60,6 +60,7 @@ resource "aws_lambda_function" "async_processor" {
     variables = {
       AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
       REQUESTS_TABLE        = aws_dynamodb_table.async_requests.name
+      KINESIS_STREAM_NAME   = aws_kinesis_stream.routing_events.name
       REGION                = local.region
     }
   }
@@ -112,6 +113,15 @@ resource "aws_iam_role_policy" "lambda_async_processor" {
           "dynamodb:GetItem"
         ]
         Resource = [aws_dynamodb_table.async_requests.arn]
+      },
+      {
+        Sid    = "KinesisPublish"
+        Effect = "Allow"
+        Action = [
+          "kinesis:PutRecord",
+          "kinesis:PutRecords"
+        ]
+        Resource = [aws_kinesis_stream.routing_events.arn]
       }
     ]
   })
