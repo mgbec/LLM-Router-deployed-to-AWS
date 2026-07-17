@@ -5,22 +5,59 @@ A production-grade LLM routing system built on **Amazon Bedrock AgentCore** that
 ## Architecture Overview
 
 ```
-Client → API Gateway → AgentCore Gateway → Router Agent (AgentCore Runtime)
-                                                    │
-                              ┌──────────────────────┼──────────────────────┐
-                              ▼                      ▼                      ▼
-                     Bedrock Guardrails     Data Classification      Kill Switch
-                     (Content Safety)      (PII/Residency Check)    (AppConfig)
-                              │                      │
-                              ▼                      ▼
-                    ┌─────────┼──────────────────────┼─────────┐
-                    ▼         ▼                      ▼         ▼
-              Bedrock Models   SageMaker EP    External APIs
-              (Nova, Claude,   (Fine-tuned)    (OpenAI, etc.)
-               Llama, Mistral)                 [PII blocked]
+Client → API Gateway → API Proxy Lambda
+                            │
+                  ┌─────────┼──────────────────────┐
+                  │         │                      │
+            [Simple/Mod]  [Complex auto-detect]   [Explicit async]
+                  │         │                      │
+                  ▼         ▼                      ▼
+            Sync Path    202 Accepted          202 Accepted
+                  │         │                      │
+                  ▼         └──────────┬───────────┘
+         AgentCore Runtime             ▼
+              │               Async Processor Lambda (15 min)
+              │                        │
+              ▼                        ▼
+     ┌────────────────┐        AgentCore Runtime
+     │  Kill Switch   │               │
+     │  (AppConfig)   │               │
+     └────────┬───────┘               │
+              ▼                        ▼
+     ┌────────────────┐     ┌────────────────────┐
+     │  Complexity    │     │  Model Invocation   │
+     │  Classifier    │     │  (Opus for complex) │
+     │  (Nova Lite)   │     └────────────────────┘
+     └────────┬───────┘               │
+              ▼                        ▼
+     ┌────────────────┐        Result → DynamoDB
+     │  Model Select  │        Client polls GET /v1/requests/{id}
+     │  (AppConfig    │
+     │   filtered)    │
+     └────────┬───────┘
+              ▼
+     ┌────────────────────────────────────────┐
+     │            Model Pool                   │
+     ├──────────────────┬─────────────────────┤
+     │ Simple:          │ Moderate:           │
+     │  Nova Lite       │  Nova Pro           │
+     │                  │  Sonnet 4.6         │
+     ├──────────────────┼─────────────────────┤
+     │ Complex (async): │ Specialized:        │
+     │  Opus 4.6        │  Sonnet 4.6         │
+     │  Sonnet 4.6      │                     │
+     └──────────────────┴─────────────────────┘
 ```
 
-The Router Agent classifies each request's complexity using a fast/cheap model (Nova Lite), then dispatches to the optimal model based on configurable policies. A feedback loop continuously adjusts model weights based on observed performance.
+## Key Features
+
+- **Dynamic Complexity Routing**: Classifies prompts and routes to appropriately-sized models
+- **Auto Async Detection**: Complex requests automatically dispatch asynchronously (client polls for results)
+- **Hot-Swap via AppConfig**: Enable/disable models, adjust traffic splits, and activate kill switches without deployments
+- **ISO 42001 Compliance**: Content guardrails, PII protection, transparency APIs, human oversight, governance documentation
+- **Adaptive Feedback Loop**: Model weights adjust based on observed latency, quality, and error rates
+- **Circuit Breaker**: Automatic failover when a model/provider degrades
+- **OpenAI-Compatible API**: Drop-in replacement with routing metadata in responses
 
 ## Project Structure
 
@@ -36,7 +73,8 @@ The Router Agent classifies each request's complexity using a fast/cheap model (
 │   ├── dynamodb.tf                   # Routing policies & metrics tables
 │   ├── lambda.tf                     # Lambda functions (tools)
 │   ├── kinesis.tf                    # Event streaming
-│   ├── appconfig.tf                  # Hot-swap feature flags
+│   ├── appconfig.tf                  # Hot-swap routing feature flags
+│   ├── async_processing.tf          # Async request processing (DynamoDB + Lambda)
 │   ├── api_gateway.tf                # Public API endpoint
 │   ├── iam.tf                        # IAM roles & policies
 │   ├── secrets.tf                    # External provider credentials
@@ -48,12 +86,13 @@ The Router Agent classifies each request's complexity using a fast/cheap model (
 │   ├── data_classification.tf      # Data sensitivity scanning, residency enforcement
 │   ├── governance.tf               # AI Policy, Risk Register, Impact Assessment
 │   └── outputs.tf                   # Terraform outputs
-├── agent/                            # Router agent container
+├── agent/                            # Router agent container (ARM64)
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── app.py                        # Agent logic (Strands framework)
+│   └── app.py                        # Routing logic + AppConfig integration
 ├── lambda/
-│   ├── api_proxy/                    # Proxies API GW → AgentCore Runtime
+│   ├── api_proxy/                    # Proxies API GW → AgentCore (sync + async dispatch)
+│   ├── async_processor/              # Long-running model invocations (Opus, 15 min)
 │   ├── complexity_classifier/        # Classifies prompt complexity
 │   ├── model_invoker/                # Invokes selected model
 │   ├── feedback_collector/           # Records quality metrics
@@ -62,9 +101,9 @@ The Router Agent classifies each request's complexity using a fast/cheap model (
 │   ├── human_override/               # Kill switch, block/pin models, report concerns
 │   └── transparency_api/             # Routing explanations, audit log, model info
 └── scripts/
-    ├── deploy.sh                     # Full build + push + apply
+    ├── deploy.sh                     # Full build + push + apply (two-phase)
     ├── get-token.sh                  # Get Cognito auth token + quick test
-    └── run-tests.sh                  # Comprehensive test suite (25 tests)
+    └── run-tests.sh                  # Comprehensive test suite (26 tests)
 ```
 
 ## Prerequisites
@@ -73,21 +112,25 @@ The Router Agent classifies each request's complexity using a fast/cheap model (
 - Terraform >= 1.5.0 (tested with 1.13.1)
 - AWS Provider 6.54.0+
 - Docker with buildx and QEMU support (for ARM64 cross-compilation)
-- Bedrock model access enabled for your account
+- Bedrock model access enabled (Nova Lite, Nova Pro, Claude Sonnet 4.6)
 - jq (for test scripts)
 
 ### One-Time Setup
-
-**Enable Bedrock model access** — In the AWS Console, go to Bedrock → Model Access and enable:
-- Amazon Nova Lite
-- Amazon Nova Pro
-- Anthropic Claude Sonnet 4
-- Anthropic Claude Opus 4 (optional, for complex tier)
 
 **Enable Docker ARM64 cross-compilation** (required on Intel/AMD machines):
 ```bash
 docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 ```
+
+**Activate models**: The first time you use a model, Bedrock auto-enables it. For Anthropic models, you may need to invoke once from an account with AWS Marketplace permissions. Open the model in Bedrock Playground to trigger activation.
+
+**Models used**:
+| Model | Inference Profile ID | Tier |
+|-------|---------------------|------|
+| Amazon Nova Lite | `us.amazon.nova-lite-v1:0` | Simple + Classifier |
+| Amazon Nova Pro | `us.amazon.nova-pro-v1:0` | Moderate |
+| Claude Sonnet 4.6 | `us.anthropic.claude-sonnet-4-6` | Moderate + Fallback |
+| Claude Opus 4.6 | `us.anthropic.claude-opus-4-6-v1` | Complex (async only) |
 
 ## Quick Start
 
@@ -126,6 +169,8 @@ docker push $ECR_REPO:latest
 terraform apply  # Phase 2: Everything else
 ```
 
+**Note**: ECR login tokens expire after 12 hours. If you get `403 Forbidden` on push, re-run the `get-login-password` command.
+
 ### 3. Create a Test User
 
 The Cognito pool uses email as an alias, so the username must NOT be an email address:
@@ -162,6 +207,7 @@ All endpoints except `/health` require JWT authentication via Cognito.
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Main routing endpoint (OpenAI-compatible) |
 | `GET` | `/v1/routing/status` | Current model availability and circuit breaker state |
+| `GET` | `/v1/requests/{requestId}` | Poll for async request results |
 | `GET` | `/health` | Health check (unauthenticated) |
 
 ### Transparency (ISO 42001 A.8)
@@ -181,49 +227,85 @@ All endpoints except `/health` require JWT authentication via Cognito.
 
 ### Request/Response Format
 
-**Request:**
+**Synchronous Request (simple/moderate prompts):**
 ```json
 {
   "messages": [
     {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Your question here"}
+    {"role": "user", "content": "What is the capital of France?"}
   ],
   "routing": {
     "policy": "default",
-    "max_cost": 0.01,
-    "prefer_provider": "bedrock"
+    "max_cost": 0.01
   }
 }
 ```
 
-**Response:**
+**Synchronous Response (200):**
 ```json
 {
   "id": "chatcmpl-abc123",
-  "model": "anthropic.claude-sonnet-4-20250514-v1:0",
+  "model": "us.amazon.nova-pro-v1:0",
   "choices": [{
-    "message": {"role": "assistant", "content": "..."},
+    "message": {"role": "assistant", "content": "The capital of France is Paris."},
     "finish_reason": "stop"
   }],
-  "usage": {"prompt_tokens": 50, "completion_tokens": 200, "total_tokens": 250},
+  "usage": {"prompt_tokens": 15, "completion_tokens": 8, "total_tokens": 23},
   "routing": {
-    "complexity": "moderate",
-    "model_selected": "anthropic.claude-sonnet-4-20250514-v1:0",
+    "complexity": "simple",
+    "model_selected": "us.amazon.nova-lite-v1:0",
     "provider": "bedrock",
-    "latency_ms": 1234,
+    "latency_ms": 890,
     "escalated": false
   }
 }
 ```
 
+**Async Response (202 — auto-detected complex or explicit `"async": true`):**
+```json
+{
+  "id": "chatcmpl-abc123",
+  "status": "pending",
+  "message": "Request accepted for async processing. Poll for results.",
+  "poll_url": "/v1/requests/abc123",
+  "request_id": "abc123"
+}
+```
+
+**Poll Response (200 — completed):**
+```json
+{
+  "id": "chatcmpl-abc123",
+  "status": "completed",
+  "model": "us.anthropic.claude-opus-4-6-v1",
+  "choices": [{
+    "message": {"role": "assistant", "content": "...detailed response..."},
+    "finish_reason": "stop"
+  }],
+  "routing": {"complexity": "complex", "model_selected": "us.anthropic.claude-opus-4-6-v1"}
+}
+```
+
 **Response Headers (Transparency):**
 ```
-X-AI-Model: anthropic.claude-sonnet-4-20250514-v1:0
+X-AI-Model: us.amazon.nova-pro-v1:0
 X-AI-Provider: bedrock
 X-AI-Routed: true
 X-AI-Complexity: moderate
 X-AI-Disclosure: Response generated by dynamically-selected AI model.
 ```
+
+## Sync vs Async Routing
+
+The router automatically decides whether to process synchronously or asynchronously:
+
+| Request Type | Routing | Response | Use Case |
+|---|---|---|---|
+| Simple/moderate prompts | Sync (Nova Lite/Pro, Sonnet) | 200 immediate | Chat, quick Q&A |
+| Complex prompts (auto-detected) | Async (Opus) | 202 + poll | Deep reasoning, code generation |
+| Explicit `"async": true` | Async (any model) | 202 + poll | Client knows it wants async |
+
+**Auto-detection** uses heuristics: prompts with multiple complexity indicators (design, prove, algorithm, pseudocode, etc.) and sufficient length automatically dispatch to the async path.
 
 ## Routing Policies & Strategies
 
@@ -241,12 +323,62 @@ X-AI-Disclosure: Response generated by dynamically-selected AI model.
 |----------|-------------|
 | `complexity_based` | Classify prompt difficulty → match to model tier |
 | `cost_optimized` | Always pick cheapest model meeting quality floor |
-| `latency_optimized` | Pick fastest-responding provider |
 | `quality_maximized` | Always pick most capable model |
 | `cascade` | Try cheap first, escalate if confidence is low |
-| `round_robin` | Distribute for A/B testing |
 
 Policies are stored in DynamoDB and can be updated without redeployment.
+
+## Hot-Swap with AppConfig
+
+The router reads feature flags from AWS AppConfig every 30 seconds. Changes take effect without any deployment or restart.
+
+### Routing Configuration Flags
+
+| Flag | What it controls |
+|------|-----------------|
+| `enable_nova_lite` | Enable/disable Nova Lite in model pool |
+| `enable_nova_pro` | Enable/disable Nova Pro |
+| `enable_claude_sonnet` | Enable/disable Sonnet 4.6 |
+| `enable_claude_opus` | Enable/disable Opus 4.6 |
+| `enable_external_openai` | Enable/disable external provider routing |
+| `enable_sagemaker` | Enable/disable SageMaker endpoint |
+| `cascade_enabled` | Toggle cascade/escalation + confidence threshold |
+| `circuit_breaker` | Failure threshold + recovery timeout |
+| `traffic_split` | Percentage distribution across models |
+
+### Kill Switch Flags
+
+| Flag | What it controls |
+|------|-----------------|
+| `system_active` | Master on/off for the entire system |
+| `bedrock_provider_active` | Enable/disable all Bedrock models |
+| `external_provider_active` | Enable/disable external providers |
+| `sagemaker_provider_active` | Enable/disable SageMaker |
+| `human_review_required` | Force human review for specified categories |
+
+### How to Hot-Swap
+
+**Via AWS Console**: AppConfig → Applications → `llm-router-dev-config` → Edit flags → Deploy
+
+**Via CLI** (example: disable Opus):
+```bash
+# The router will stop using Opus within 30 seconds
+# Update feature flags and deploy via AppConfig
+```
+
+**Via Admin API** (emergency):
+```bash
+curl -X POST "https://your-api/v1/admin/override" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"action":"kill_switch","parameters":{"target":"system","enabled":false},"reason":"Emergency shutdown"}'
+```
+
+### Deployment Strategies
+
+| Environment | Rollout Speed | Rollback |
+|---|---|---|
+| dev | Instant (0 min) | Manual |
+| prod | 10 min linear (20% increments) | Auto on CloudWatch alarm |
 
 ## ISO 42001 Compliance
 
@@ -270,27 +402,7 @@ See `architecture/iso-42001-gap-analysis.md` for the full control mapping.
 - **Alarms**: Error rate, latency (p99 > 5s), cost spikes, circuit breaker opens, human review backlog
 - **Audit Logs**: Routing audit (90-day), data flow log (90-day), human override log (90-day)
 - **Kinesis**: Real-time routing event stream feeding the adaptive weight-adjustment Lambda
-
-## Hot-Swap with AppConfig
-
-Enable/disable models or shift traffic instantly — no deployment needed:
-
-- **Routing config**: Toggle models, adjust traffic split percentages, configure cascade thresholds
-- **Kill switch**: Halt the entire system, disable individual providers, or force human review for categories
-
-## Configuration
-
-Key settings in `terraform/variables.tf`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `router_agent_image_tag` | `latest` | Docker tag (ECR repo created automatically) |
-| `enable_external_providers` | `false` | Route to OpenAI, etc. |
-| `enable_sagemaker_endpoint` | `false` | Route to self-hosted models |
-| `default_quality_threshold` | `0.8` | Minimum quality score |
-| `router_agent_min_instances` | `2` | Warm instances for low latency |
-| `network_mode` | `PUBLIC` | AgentCore network mode |
-| `log_retention_days` | `30` | CloudWatch log retention |
+- **AgentCore Native**: Built-in OpenTelemetry instrumentation (auto-enabled, no config needed)
 
 ## Testing
 
@@ -308,13 +420,13 @@ Authenticates and sends a single chat completion request to verify the system is
 ./scripts/run-tests.sh
 ```
 
-Runs ~25 tests across 10 categories:
+Runs 26 tests across 10 categories:
 
 | # | Category | What it validates |
 |---|----------|-------------------|
 | 1 | Health & Connectivity | Endpoints respond, auth enforcement works |
-| 2 | Basic Routing | Simple prompts route successfully, return content |
-| 3 | Complexity-Based Routing | Moderate/complex prompts get different treatment |
+| 2 | Basic Routing | Simple prompts route to cheap models, return content |
+| 3 | Complexity-Based Routing | Moderate → Nova Pro, Complex → auto-async with Opus |
 | 4 | Routing Policies | Default, budget-conscious, enterprise, cost overrides |
 | 5 | Multi-Turn Conversation | System prompts, context retention across turns |
 | 6 | Transparency API | Model info, user audit log, routing explanations |
@@ -323,12 +435,45 @@ Runs ~25 tests across 10 categories:
 | 9 | Error Handling | Empty messages, invalid policy, malformed JSON |
 | 10 | Guardrails | Medical advice topic blocking |
 
-To skip the login prompt on repeated runs, export the token:
-
+To skip the login prompt on repeated runs:
 ```bash
 export LLM_ROUTER_TOKEN="<your-access-token>"
 ./scripts/run-tests.sh
 ```
+
+## Configuration
+
+Key settings in `terraform/variables.tf`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `router_agent_image_tag` | `latest` | Docker tag (ECR repo created automatically) |
+| `enable_external_providers` | `false` | Route to OpenAI, etc. |
+| `enable_sagemaker_endpoint` | `false` | Route to self-hosted models |
+| `default_quality_threshold` | `0.8` | Minimum quality score |
+| `router_agent_min_instances` | `2` | Warm instances for low latency |
+| `network_mode` | `PUBLIC` | AgentCore network mode |
+| `log_retention_days` | `30` | CloudWatch log retention |
+
+## Updating the Agent
+
+When you change `agent/app.py`, rebuild and redeploy:
+
+```bash
+# Re-authenticate to ECR (tokens expire after 12h)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 339712707840.dkr.ecr.us-east-1.amazonaws.com
+
+# Build ARM64 image and push
+docker build --platform linux/arm64 -t $(cd terraform && terraform output -raw ecr_repository_url):latest agent/
+docker push $(cd terraform && terraform output -raw ecr_repository_url):latest
+
+# Force AgentCore to pull new image (destroy + recreate runtime)
+cd terraform
+terraform destroy -target=aws_bedrockagentcore_agent_runtime.router
+terraform apply
+```
+
+Wait 4-5 minutes for the new container to start before testing.
 
 ## Cleanup
 
@@ -336,3 +481,10 @@ export LLM_ROUTER_TOKEN="<your-access-token>"
 cd terraform
 terraform destroy
 ```
+
+## Known Limitations
+
+- **Opus sync timeout**: Claude Opus takes >30s for complex prompts, exceeding API Gateway's limit. Complex requests are automatically dispatched async.
+- **AgentCore image updates**: Changing env vars triggers a new runtime version, but ECR image tag changes (`latest`) require destroy + recreate to force a pull.
+- **AppConfig polling**: Feature flag changes take up to 30 seconds to take effect (cache TTL).
+- **Model availability**: Bedrock inference profiles use `us.` prefix (region-scoped). Cross-region models need `global.` prefix profiles.
