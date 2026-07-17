@@ -65,13 +65,9 @@ resource "aws_iam_role_policy" "agentcore_runtime_bedrock" {
           "bedrock:InvokeModelWithResponseStream"
         ]
         Resource = [
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/amazon.nova-lite-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/amazon.nova-pro-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/anthropic.claude-haiku-4-20250514-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/anthropic.claude-opus-4-20250514-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/meta.llama4-maverick-17b-instruct-v1:0",
-          "arn:${local.partition}:bedrock:${local.region}::foundation-model/mistral.mistral-large-2411-v1:0"
+          "arn:${local.partition}:bedrock:${local.region}::foundation-model/*",
+          "arn:${local.partition}:bedrock:${local.region}:${local.account_id}:inference-profile/us.*",
+          "arn:${local.partition}:bedrock:us-*::foundation-model/*"
         ]
       },
       {

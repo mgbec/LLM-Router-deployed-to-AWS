@@ -13,9 +13,27 @@ resource "aws_apigatewayv2_api" "router" {
 
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["POST", "OPTIONS"]
+    allow_methods = ["POST", "OPTIONS", "GET"]
     allow_headers = ["Content-Type", "Authorization", "X-Request-Id", "X-Routing-Policy"]
     max_age       = 3600
+  }
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
+# Stage ($default with auto-deploy)
+# -----------------------------------------------------------------------------
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.router.id
+  name        = "$default"
+  auto_deploy = true
+
+  lifecycle {
+    # Prevent destroy/recreate conflicts on the default stage
+    create_before_destroy = true
+    ignore_changes        = [deployment_id]
   }
 
   tags = local.common_tags
@@ -105,7 +123,7 @@ resource "aws_lambda_function" "api_proxy" {
   role          = aws_iam_role.lambda_api_proxy.arn
   handler       = "index.handler"
   runtime       = "python3.13"
-  timeout       = 120
+  timeout       = 29
   memory_size   = 256
 
   filename         = data.archive_file.api_proxy.output_path
@@ -114,6 +132,8 @@ resource "aws_lambda_function" "api_proxy" {
   environment {
     variables = {
       AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
+      ASYNC_PROCESSOR_ARN   = aws_lambda_function.async_processor.arn
+      REQUESTS_TABLE        = aws_dynamodb_table.async_requests.name
       REGION                = local.region
     }
   }
@@ -166,7 +186,8 @@ resource "aws_iam_role_policy" "lambda_api_proxy_agentcore" {
           "bedrock-agentcore:InvokeAgentRuntime"
         ]
         Resource = [
-          aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
+          aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn,
+          "${aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn}/*"
         ]
       }
     ]

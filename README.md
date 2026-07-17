@@ -63,15 +63,31 @@ The Router Agent classifies each request's complexity using a fast/cheap model (
 │   └── transparency_api/             # Routing explanations, audit log, model info
 └── scripts/
     ├── deploy.sh                     # Full build + push + apply
-    └── get-token.sh                  # Get Cognito auth token for testing
+    ├── get-token.sh                  # Get Cognito auth token + quick test
+    └── run-tests.sh                  # Comprehensive test suite (25 tests)
 ```
 
 ## Prerequisites
 
 - AWS CLI configured with appropriate credentials
-- Terraform >= 1.14.0
-- Docker (for building the agent container)
-- Bedrock model access enabled for your account (Nova, Claude, etc.)
+- Terraform >= 1.5.0 (tested with 1.13.1)
+- AWS Provider 6.54.0+
+- Docker with buildx and QEMU support (for ARM64 cross-compilation)
+- Bedrock model access enabled for your account
+- jq (for test scripts)
+
+### One-Time Setup
+
+**Enable Bedrock model access** — In the AWS Console, go to Bedrock → Model Access and enable:
+- Amazon Nova Lite
+- Amazon Nova Pro
+- Anthropic Claude Sonnet 4
+- Anthropic Claude Opus 4 (optional, for complex tier)
+
+**Enable Docker ARM64 cross-compilation** (required on Intel/AMD machines):
+```bash
+docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+```
 
 ## Quick Start
 
@@ -86,31 +102,40 @@ cp terraform.tfvars.example terraform.tfvars
 ### 2. Deploy
 
 ```bash
-# Full deployment (creates infra, builds image, pushes to ECR)
+# Full deployment (creates ECR, builds ARM64 image, pushes, deploys infra)
 ./scripts/deploy.sh
-
-# Or step by step:
-cd terraform
-terraform init
-terraform apply                    # Creates ECR repo + all infrastructure
-
-# Then build and push the agent image:
-ECR_REPO=$(terraform output -raw ecr_repository_url)
-aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REPO
-docker build -t $ECR_REPO:latest ../agent
-docker push $ECR_REPO:latest
 ```
 
-Note: Terraform creates the ECR repository automatically. You don't need to provide an image URI upfront — just push your image after the first apply.
+The deploy script runs in two phases:
+1. Creates the ECR repository (Terraform targeted apply)
+2. Builds and pushes the ARM64 Docker image
+3. Applies all remaining infrastructure (AgentCore validates the image exists)
+
+For step-by-step manual deployment:
+```bash
+cd terraform
+terraform init
+terraform apply -target=aws_ecr_repository.router_agent  # Phase 1: ECR
+
+# Build and push ARM64 image
+ECR_REPO=$(terraform output -raw ecr_repository_url)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $(echo $ECR_REPO | cut -d/ -f1)
+docker build --platform linux/arm64 -t $ECR_REPO:latest ../agent
+docker push $ECR_REPO:latest
+
+terraform apply  # Phase 2: Everything else
+```
 
 ### 3. Create a Test User
+
+The Cognito pool uses email as an alias, so the username must NOT be an email address:
 
 ```bash
 aws cognito-idp admin-create-user \
   --region us-east-1 \
-  --user-pool-id $(terraform output -raw cognito_user_pool_id) \
+  --user-pool-id $(cd terraform && terraform output -raw cognito_user_pool_id) \
   --username testuser \
-  --user-attributes Name=email,Value=user@example.com \
+  --user-attributes Name=email,Value=you@example.com \
   --temporary-password 'TempPass123!'
 ```
 
@@ -118,16 +143,14 @@ aws cognito-idp admin-create-user \
 
 ```bash
 ./scripts/get-token.sh
-
-# Or manually:
-curl -X POST "$(terraform output -raw chat_completions_url)" \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "Explain quantum computing"}],
-    "routing": {"policy": "default"}
-  }'
 ```
+
+The script will:
+1. Prompt for username and password
+2. Handle the NEW_PASSWORD_REQUIRED challenge (first login)
+3. Acquire an access token
+4. Run a health check against the API
+5. Send a test chat completion request and display the response
 
 ## API Endpoints
 
@@ -268,6 +291,44 @@ Key settings in `terraform/variables.tf`:
 | `router_agent_min_instances` | `2` | Warm instances for low latency |
 | `network_mode` | `PUBLIC` | AgentCore network mode |
 | `log_retention_days` | `30` | CloudWatch log retention |
+
+## Testing
+
+### Quick Test
+
+```bash
+./scripts/get-token.sh
+```
+
+Authenticates and sends a single chat completion request to verify the system is working.
+
+### Full Test Suite
+
+```bash
+./scripts/run-tests.sh
+```
+
+Runs ~25 tests across 10 categories:
+
+| # | Category | What it validates |
+|---|----------|-------------------|
+| 1 | Health & Connectivity | Endpoints respond, auth enforcement works |
+| 2 | Basic Routing | Simple prompts route successfully, return content |
+| 3 | Complexity-Based Routing | Moderate/complex prompts get different treatment |
+| 4 | Routing Policies | Default, budget-conscious, enterprise, cost overrides |
+| 5 | Multi-Turn Conversation | System prompts, context retention across turns |
+| 6 | Transparency API | Model info, user audit log, routing explanations |
+| 7 | Human Oversight API | Concern reporting, admin override actions |
+| 8 | Response Headers | X-AI-Model and X-AI-Routed disclosure headers |
+| 9 | Error Handling | Empty messages, invalid policy, malformed JSON |
+| 10 | Guardrails | Medical advice topic blocking |
+
+To skip the login prompt on repeated runs, export the token:
+
+```bash
+export LLM_ROUTER_TOKEN="<your-access-token>"
+./scripts/run-tests.sh
+```
 
 ## Cleanup
 

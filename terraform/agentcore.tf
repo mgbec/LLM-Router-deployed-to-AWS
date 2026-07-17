@@ -66,12 +66,7 @@ resource "aws_bedrockagentcore_agent_runtime" "router" {
     network_mode = var.network_mode
   }
 
-  authorizer_configuration {
-    custom_jwt_authorizer {
-      discovery_url   = "https://cognito-idp.${local.region}.amazonaws.com/${aws_cognito_user_pool.router.id}/.well-known/openid-configuration"
-      allowed_clients = [aws_cognito_user_pool_client.router_web.id]
-    }
-  }
+  # Auth handled at API Gateway layer; runtime uses IAM (default when no authorizer set)
 
   environment_variables = {
     ENVIRONMENT              = var.environment
@@ -81,8 +76,8 @@ resource "aws_bedrockagentcore_agent_runtime" "router" {
     APPCONFIG_APP_ID         = aws_appconfig_application.router.id
     APPCONFIG_ENV_ID         = aws_appconfig_environment.router.environment_id
     APPCONFIG_PROFILE_ID     = aws_appconfig_configuration_profile.routing_config.configuration_profile_id
-    CLASSIFIER_MODEL_ID      = "amazon.nova-lite-v1:0"
-    DEFAULT_FALLBACK_MODEL   = "anthropic.claude-sonnet-4-20250514-v1:0"
+    CLASSIFIER_MODEL_ID      = "us.amazon.nova-lite-v1:0"
+    DEFAULT_FALLBACK_MODEL   = "us.anthropic.claude-sonnet-4-20250514-v1:0"
     ENABLE_EXTERNAL_PROVIDERS = tostring(var.enable_external_providers)
     GATEWAY_URL              = aws_bedrockagentcore_gateway.router.gateway_url
     LOG_GROUP_NAME           = aws_cloudwatch_log_group.router_agent.name
@@ -93,6 +88,7 @@ resource "aws_bedrockagentcore_agent_runtime" "router" {
     AUDIT_LOG_TABLE          = aws_dynamodb_table.routing_audit_log.name
     KILL_SWITCH_PROFILE      = aws_appconfig_configuration_profile.kill_switch.configuration_profile_id
     DATA_FLOW_LOG_TABLE      = aws_dynamodb_table.data_flow_log.name
+    DEPLOY_VERSION           = "6"
   }
 
   tags = local.common_tags
