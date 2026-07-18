@@ -507,6 +507,45 @@ terraform apply
 
 Wait 4-5 minutes for the new container to start before testing.
 
+## Frontend (Chat UI)
+
+A React chat interface that shows routing metadata for each response.
+
+### Setup
+
+```bash
+cd frontend
+cp .env.example .env
+# Edit .env with your values from terraform output:
+#   VITE_API_ENDPOINT - from: terraform output -raw api_endpoint
+#   VITE_COGNITO_CLIENT_ID - from: terraform output -raw cognito_web_client_id
+
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 — sign in with your Cognito username/password.
+
+### Features
+
+- Cognito authentication (handles temporary password flow)
+- Routing policy selector (Default / Budget / Enterprise)
+- Async toggle for forcing long-running requests
+- Routing metadata badge on each response (model, complexity, latency)
+- Automatic async polling with spinner
+- AI disclosure footer (ISO 42001 A.8.2)
+- Responsive dark theme
+
+### Deploy to S3/CloudFront
+
+```bash
+cd frontend
+npm run build
+
+# Upload to S3
+aws s3 sync dist/ s3://your-frontend-bucket/ --delete
+```
+
 ## CLI Usage Examples
 
 First, set up your environment:
