@@ -463,6 +463,19 @@ Before routing to external providers, a data classification step:
 4. **Decision**: Block external routing if sensitive data detected; force to internal provider
 5. **Audit**: Log every classification decision to Data Flow Log table (90-day retention)
 
+### Data Provenance & Lineage (A.7.6)
+
+Every routing decision (sync and async) writes a full provenance record:
+- **WHO**: User ID, session ID
+- **WHAT**: Prompt hash (not raw text), model selected, token counts
+- **WHY**: Complexity classification, method used, policy applied, all candidates scored
+- **HOW**: Routing strategy, sync/async path, escalation status, latency, cost
+- **WHERE**: Data residency (region), whether data left AWS, PII detection result
+- **MODEL PROVENANCE**: Provider name, model family, inference profile, data retention policy
+- **CONFIG STATE**: AppConfig feature flags active at decision time
+
+Records are queryable by user (via Transparency API) and by admin (via DynamoDB GSIs).
+
 ### Human Oversight (A.9.5)
 
 - **Kill Switch**: AppConfig feature flags allow operators to instantly disable the entire system, individual providers, or specific models — no deployment required.

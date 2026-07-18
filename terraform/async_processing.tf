@@ -61,6 +61,7 @@ resource "aws_lambda_function" "async_processor" {
       AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.router.agent_runtime_arn
       REQUESTS_TABLE        = aws_dynamodb_table.async_requests.name
       KINESIS_STREAM_NAME   = aws_kinesis_stream.routing_events.name
+      AUDIT_LOG_TABLE       = aws_dynamodb_table.routing_audit_log.name
       REGION                = local.region
     }
   }
@@ -122,6 +123,12 @@ resource "aws_iam_role_policy" "lambda_async_processor" {
           "kinesis:PutRecords"
         ]
         Resource = [aws_kinesis_stream.routing_events.arn]
+      },
+      {
+        Sid    = "AuditLogWrite"
+        Effect = "Allow"
+        Action = ["dynamodb:PutItem"]
+        Resource = [aws_dynamodb_table.routing_audit_log.arn]
       }
     ]
   })

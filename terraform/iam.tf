@@ -115,6 +115,16 @@ resource "aws_iam_role_policy" "agentcore_runtime_dynamodb" {
         Resource = [
           aws_dynamodb_table.routing_metrics.arn
         ]
+      },
+      {
+        Sid    = "ProvenanceAuditLog"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem"
+        ]
+        Resource = [
+          aws_dynamodb_table.routing_audit_log.arn
+        ]
       }
     ]
   })

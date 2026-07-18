@@ -105,6 +105,9 @@ def handler(event, context):
             except Exception as kinesis_err:
                 logger.warning(f"Failed to emit Kinesis event: {kinesis_err}")
 
+        # Write provenance/audit record (ISO 42001 A.7.6)
+        _write_async_provenance(request_id, payload, agent_response)
+
         return {"status": "completed", "request_id": request_id}
 
     except Exception as e:
@@ -124,3 +127,75 @@ def handler(event, context):
             )
 
         return {"status": "failed", "request_id": request_id, "error": str(e)}
+
+
+# =============================================================================
+# Provenance Logging (ISO 42001 A.7.6)
+# =============================================================================
+
+AUDIT_LOG_TABLE = os.environ.get("AUDIT_LOG_TABLE", "")
+_audit_table = None
+
+
+def _get_audit_table():
+    global _audit_table
+    if _audit_table is None and AUDIT_LOG_TABLE:
+        _audit_table = dynamodb.Table(AUDIT_LOG_TABLE)
+    return _audit_table
+
+
+def _write_async_provenance(request_id: str, payload: dict, agent_response: dict):
+    """Write provenance record for async requests."""
+    audit = _get_audit_table()
+    if not audit:
+        return
+
+    now = int(time.time())
+    prompt = payload.get("prompt", "")
+    model_id = agent_response.get("model_id", "unknown")
+
+    import hashlib
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16] if prompt else ""
+
+    try:
+        audit.put_item(Item={
+            "request_id": request_id,
+            "timestamp": now,
+            "user_id": payload.get("user_id", "anonymous"),
+            "session_id": f"async-{request_id}",
+
+            # What
+            "prompt_hash": prompt_hash,
+            "prompt_length": len(prompt),
+            "model_id": model_id,
+            "provider": agent_response.get("provider", "bedrock"),
+            "input_tokens": agent_response.get("input_tokens", 0),
+            "output_tokens": agent_response.get("output_tokens", 0),
+
+            # Why
+            "complexity": agent_response.get("complexity", "complex"),
+            "classification_method": agent_response.get("classification_method", "model"),
+            "policy_id": payload.get("routing", {}).get("policy", "default"),
+
+            # How
+            "routing_strategy": "complexity_based",
+            "is_async": True,
+            "escalated": agent_response.get("escalated", False),
+            "latency_ms": Decimal(str(agent_response.get("latency_ms", 0))),
+            "estimated_cost": Decimal(str(agent_response.get("cost", 0))),
+
+            # Where
+            "data_residency": "aws-us-east-1" if "us." in model_id else "unknown",
+            "external_provider": False,
+
+            # Model provenance
+            "model_provenance": {
+                "inference_profile": model_id,
+                "data_retention": "none",
+            },
+
+            # TTL
+            "expires_at": now + (90 * 24 * 3600),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to write async provenance: {e}")

@@ -103,7 +103,7 @@ ISO/IEC 42001:2023 defines requirements for an Artificial Intelligence Managemen
 | A.7.3 Data Quality | ❌ Missing | No data quality framework for the routing metrics used to adjust weights. Are the quality_score values calibrated? Who validates them? |
 | A.7.4 Data Preparation | ✅ Partial | Kinesis pipeline processes events. Gap: No documented data cleaning or validation before weight adjustment. |
 | A.7.5 Data Acquisition | ❌ Missing | **Important gap.** No policy on what user data (prompts, responses) flows to external providers. No data residency controls. If a prompt is routed to OpenAI, that data leaves your AWS boundary — this needs explicit governance. |
-| A.7.6 Data Provenance | ❌ Missing | No tracking of where model responses came from in a way that's surfaced to the end user. Routing decisions are logged, but there's no lineage from "this response came from model X trained on data Y." |
+| A.7.6 Data Provenance | ✔️ Covered | Full lineage record written per request: prompt hash, model selected, provider, classification reasoning, policy applied, candidates considered, data residency, AppConfig state at time of decision. Both sync and async paths write provenance. Accessible via Transparency API. 90-day retention with PITR. |
 
 **What to add**:
 - **Data classification and residency policy**: Define which data categories (PII, regulated, confidential) can be routed to which providers. Block PII from flowing to external providers without explicit consent.

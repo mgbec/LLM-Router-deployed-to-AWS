@@ -388,6 +388,7 @@ Built-in components addressing ISO/IEC 42001:2023 (AI Management Systems):
 |-----------|----------|--------------|
 | Bedrock Guardrails | A.9.4, A.7.5 | Content filtering, PII masking, topic blocking, prompt attack detection |
 | Data Classification | A.7.5, A.7.6 | Scans for PII before external routing, enforces data residency, logs decisions |
+| Provenance Logging | A.7.6 | Full lineage record per request: who, what, why, how, where, model provenance |
 | Human Oversight | A.9.5, A.3.3 | Kill switch, model override, concern reporting with SLA tracking |
 | Transparency API | A.8.2–A.8.4 | Routing explanations, user audit log, model cards, mandatory disclosure headers |
 | Governance Docs | A.2, A.5, A.6.2.9 | AI Policy, Risk Register, Impact Assessment, Acceptable Use Policy (versioned S3) |
@@ -401,8 +402,39 @@ See `architecture/iso-42001-gap-analysis.md` for the full control mapping.
 - **CloudWatch Dashboard**: 7 panels — requests/model, latency p50/p95/p99, cost/model, quality scores, escalations, circuit breakers, complexity distribution
 - **Alarms**: Error rate, latency (p99 > 5s), cost spikes, circuit breaker opens, human review backlog
 - **Audit Logs**: Routing audit (90-day), data flow log (90-day), human override log (90-day)
-- **Kinesis**: Real-time routing event stream feeding the adaptive weight-adjustment Lambda
+- **Kinesis**: Real-time routing event stream feeding the adaptive weight-adjustment Lambda (both sync and async paths publish)
 - **AgentCore Native**: Built-in OpenTelemetry instrumentation (auto-enabled, no config needed)
+- **Provenance/Lineage**: Every routing decision writes a full lineage record to DynamoDB (see Data Provenance below)
+
+## Data Provenance & Lineage (ISO 42001 A.7.6)
+
+Every routing decision — sync and async — writes a provenance record to the `routing-audit-log` DynamoDB table. This provides full lineage tracking for compliance audits.
+
+### What's Recorded
+
+| Category | Fields | Purpose |
+|----------|--------|---------|
+| **WHO** | `user_id`, `session_id` | Who made the request |
+| **WHAT** | `prompt_hash`, `model_id`, `input_tokens`, `output_tokens` | What was processed (prompt hashed, not stored raw) |
+| **WHY** | `complexity`, `classification_method`, `policy_id`, `candidates_considered`, `model_scores` | Why this model was selected |
+| **HOW** | `routing_strategy`, `is_async`, `escalated`, `latency_ms`, `estimated_cost` | How the decision was made |
+| **WHERE** | `data_residency`, `external_provider`, `pii_detected` | Where data flowed (region, stayed in AWS or not) |
+| **MODEL PROVENANCE** | `provider_name`, `model_family`, `inference_profile`, `data_retention` | Who made the model, its lineage |
+| **CONFIG STATE** | `appconfig_state.system_active`, `appconfig_state.model_enabled` | What feature flags were active at decision time |
+
+### Access Points
+
+| Method | Endpoint | Who |
+|--------|----------|-----|
+| `GET /v1/audit/my-requests` | User's own routing history | End users |
+| `GET /v1/routing/explain/{requestId}` | Full decision explanation | End users |
+| DynamoDB console / queries | Full audit access | Admins/auditors |
+
+### Retention
+
+- 90-day TTL on all records (configurable)
+- Point-in-time recovery enabled for disaster recovery
+- GSIs on `user_id` and `session_id` for efficient queries
 
 ## Testing
 

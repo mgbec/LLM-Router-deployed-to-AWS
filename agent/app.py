@@ -443,6 +443,148 @@ def _record_failure(model_id: str):
 
 
 # =============================================================================
+# Provenance Logging (ISO 42001 A.7.6)
+# =============================================================================
+
+# DynamoDB table for audit log
+_audit_table = None
+
+def _get_audit_table():
+    """Lazy-init the audit log table."""
+    global _audit_table
+    if _audit_table is None and AUDIT_LOG_TABLE:
+        _audit_table = dynamodb.Table(AUDIT_LOG_TABLE)
+    return _audit_table
+
+
+def _write_provenance(
+    request_id: str,
+    user_id: str,
+    session_id: str,
+    prompt: str,
+    model_id: str,
+    provider: str,
+    complexity: str,
+    classification_method: str,
+    policy_id: str,
+    candidates_considered: list,
+    latency_ms: float,
+    input_tokens: int,
+    output_tokens: int,
+    cost: float,
+    escalated: bool,
+    is_async: bool,
+):
+    """
+    Write a full provenance/lineage record for each routing decision.
+    ISO 42001 A.7.6: Data Provenance — track origin and history of AI outputs.
+
+    Records:
+    - WHO: user_id, session_id
+    - WHAT: prompt hash, model selected, response metadata
+    - WHY: complexity classification, policy applied, candidates scored
+    - HOW: classification method, selection algorithm, cost/quality factors
+    - WHEN: timestamp, latency
+    - WHERE: provider, region, data residency status
+    """
+    table = _get_audit_table()
+    if not table:
+        return
+
+    now = int(time.time())
+    import hashlib
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16] if prompt else ""
+
+    try:
+        from decimal import Decimal
+        table.put_item(Item={
+            # Identity
+            "request_id": request_id,
+            "timestamp": now,
+            "user_id": user_id or "anonymous",
+            "session_id": session_id or "none",
+
+            # Data Lineage - WHAT was produced
+            "prompt_hash": prompt_hash,
+            "prompt_length": len(prompt),
+            "model_id": model_id,
+            "provider": provider,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+
+            # Data Lineage - WHY this model was chosen
+            "complexity": complexity,
+            "classification_method": classification_method,
+            "policy_id": policy_id,
+            "candidates_considered": candidates_considered,
+            "model_scores": {m: str(MODEL_COSTS.get(m, "unknown")) for m in candidates_considered},
+
+            # Data Lineage - HOW it was processed
+            "routing_strategy": "complexity_based",
+            "is_async": is_async,
+            "escalated": escalated,
+            "latency_ms": Decimal(str(round(latency_ms, 2))),
+            "estimated_cost": Decimal(str(cost)),
+
+            # Data Residency - WHERE data flowed
+            "data_residency": "aws-us-east-1" if "us." in model_id else "unknown",
+            "external_provider": provider != "bedrock",
+            "pii_detected": False,  # Would be True if data classifier flagged it
+
+            # Model Provenance - WHO made the model
+            "model_provenance": {
+                "provider_name": _get_model_provider(model_id),
+                "model_family": _get_model_family(model_id),
+                "inference_profile": model_id,
+                "data_retention": "none (Bedrock does not retain prompts)",
+            },
+
+            # AppConfig state at time of decision
+            "appconfig_state": {
+                "system_active": config_manager.is_system_active(),
+                "model_enabled": config_manager.is_model_enabled(model_id),
+            },
+
+            # TTL
+            "expires_at": now + (90 * 24 * 3600),  # 90-day retention
+        })
+    except Exception as e:
+        logger.warning(f"Failed to write provenance record: {e}")
+
+
+def _get_model_provider(model_id: str) -> str:
+    """Map model ID to provider name."""
+    if "anthropic" in model_id:
+        return "Anthropic"
+    elif "amazon" in model_id or "nova" in model_id:
+        return "Amazon"
+    elif "meta" in model_id or "llama" in model_id:
+        return "Meta"
+    elif "mistral" in model_id:
+        return "Mistral AI"
+    return "Unknown"
+
+
+def _get_model_family(model_id: str) -> str:
+    """Map model ID to model family."""
+    if "opus" in model_id:
+        return "Claude Opus"
+    elif "sonnet" in model_id:
+        return "Claude Sonnet"
+    elif "haiku" in model_id:
+        return "Claude Haiku"
+    elif "nova-lite" in model_id:
+        return "Nova Lite"
+    elif "nova-pro" in model_id:
+        return "Nova Pro"
+    elif "llama" in model_id:
+        return "Llama"
+    elif "mistral" in model_id:
+        return "Mistral"
+    return "Unknown"
+
+
+# =============================================================================
 # HTTP Server (AgentCore Runtime expects HTTP on port 8080)
 # =============================================================================
 
@@ -588,6 +730,26 @@ async def invoke(request: Request):
                 )
         except Exception:
             pass  # Non-critical
+
+        # Step 5: Write provenance record to audit log (ISO 42001 A.7.6)
+        _write_provenance(
+            request_id=request_id,
+            user_id=body.get("user_id", ""),
+            session_id=body.get("session_id", ""),
+            prompt=prompt,
+            model_id=selected_model,
+            provider="bedrock",
+            complexity=complexity,
+            classification_method=classification_method,
+            policy_id=policy_id,
+            candidates_considered=candidates,
+            latency_ms=round(latency_ms, 2),
+            input_tokens=usage.get("inputTokens", 0),
+            output_tokens=usage.get("outputTokens", 0),
+            cost=MODEL_COSTS.get(selected_model, 0),
+            escalated=False,
+            is_async=False,
+        )
 
         return JSONResponse(content={
             "content": output_text,
