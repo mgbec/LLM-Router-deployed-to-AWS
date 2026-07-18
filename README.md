@@ -55,9 +55,11 @@ Client → API Gateway → API Proxy Lambda
 - **Auto Async Detection**: Complex requests automatically dispatch asynchronously (client polls for results)
 - **Hot-Swap via AppConfig**: Enable/disable models, adjust traffic splits, and activate kill switches without deployments
 - **ISO 42001 Compliance**: Content guardrails, PII protection, transparency APIs, human oversight, governance documentation
-- **Adaptive Feedback Loop**: Model weights adjust based on observed latency, quality, and error rates
+- **Data Provenance & Lineage**: Full audit trail per request (who, what, why, how, where, model provenance)
+- **Adaptive Feedback Loop**: Model weights adjust based on observed latency, quality, and error rates via Kinesis pipeline
 - **Circuit Breaker**: Automatic failover when a model/provider degrades
 - **OpenAI-Compatible API**: Drop-in replacement with routing metadata in responses
+- **Chat UI**: React frontend with Cognito auth, routing metadata display, policy selector, and async polling
 
 ## Project Structure
 
@@ -100,6 +102,19 @@ Client → API Gateway → API Proxy Lambda
 │   ├── data_classifier/              # Scans for PII, enforces data residency
 │   ├── human_override/               # Kill switch, block/pin models, report concerns
 │   └── transparency_api/             # Routing explanations, audit log, model info
+├── frontend/                          # React chat UI
+│   ├── src/
+│   │   ├── App.jsx                   # Auth state management
+│   │   ├── api.js                    # API client (auth, chat, poll)
+│   │   ├── config.js                 # Environment configuration
+│   │   ├── styles.css                # Dark theme styles
+│   │   └── components/
+│   │       ├── LoginForm.jsx         # Cognito login + new password flow
+│   │       ├── ChatWindow.jsx        # Main chat with policy selector + async
+│   │       ├── MessageBubble.jsx     # Message rendering
+│   │       └── RoutingBadge.jsx      # Model/complexity/latency badges
+│   ├── package.json
+│   └── vite.config.js
 └── scripts/
     ├── deploy.sh                     # Full build + push + apply (two-phase)
     ├── get-token.sh                  # Get Cognito auth token + quick test
