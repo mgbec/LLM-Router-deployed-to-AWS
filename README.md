@@ -507,6 +507,210 @@ terraform apply
 
 Wait 4-5 minutes for the new container to start before testing.
 
+## CLI Usage Examples
+
+First, set up your environment:
+
+```bash
+# Get API endpoint
+export API_URL=$(cd terraform && terraform output -raw api_endpoint)
+
+# Get auth token (replace YOUR_PASSWORD)
+export LLM_ROUTER_TOKEN=$(cd terraform && aws cognito-idp initiate-auth \
+  --region us-east-1 \
+  --auth-flow USER_PASSWORD_AUTH \
+  --client-id $(terraform output -raw cognito_web_client_id) \
+  --auth-parameters USERNAME=testuser,PASSWORD=YOUR_PASSWORD \
+  --query 'AuthenticationResult.AccessToken' --output text)
+```
+
+### Simple Question (routes to Nova Lite)
+
+```bash
+curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"What is the speed of light?"}]}' | python3 -m json.tool
+```
+
+### Moderate Question (routes to Nova Pro)
+
+```bash
+curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Explain the differences between TCP and UDP, including when you would choose each for a networked application."}]}' | python3 -m json.tool
+```
+
+### With System Prompt
+
+```bash
+curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages":[
+      {"role":"system","content":"You are a concise technical writer. Respond in bullet points."},
+      {"role":"user","content":"What are the SOLID principles in software engineering?"}
+    ]
+  }' | python3 -m json.tool
+```
+
+### Force a Specific Policy
+
+```bash
+# Budget-conscious (cheapest model that works)
+curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages":[{"role":"user","content":"Summarize the benefits of microservices."}],
+    "routing":{"policy":"budget_conscious"}
+  }' | python3 -m json.tool
+
+# Enterprise (highest quality)
+curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages":[{"role":"user","content":"Review this architecture for security vulnerabilities."}],
+    "routing":{"policy":"enterprise"}
+  }' | python3 -m json.tool
+```
+
+### Async Request (for complex/long-running tasks)
+
+```bash
+# Submit async request
+RESPONSE=$(curl -s -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages":[{"role":"user","content":"Write a comprehensive comparison of React, Vue, and Angular for enterprise applications."}],
+    "routing":{"async":true}
+  }')
+
+echo "$RESPONSE" | python3 -m json.tool
+
+# Extract request ID and poll
+REQUEST_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['request_id'])")
+
+# Poll until complete (repeat every 10 seconds)
+curl -s -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  "$API_URL/v1/requests/$REQUEST_ID" | python3 -m json.tool
+```
+
+### Check Which Model Was Used
+
+```bash
+# Response headers show the model (use -i for headers)
+curl -s -i -X POST "$API_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello!"}]}' 2>&1 | grep -i "x-ai-"
+```
+
+### View Your Routing History
+
+```bash
+curl -s -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  "$API_URL/v1/audit/my-requests" | python3 -m json.tool
+```
+
+### See Available Models
+
+```bash
+curl -s -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  "$API_URL/v1/models/info" | python3 -m json.tool
+```
+
+### Report a Concern About a Response
+
+```bash
+curl -s -X POST "$API_URL/v1/concerns/report" \
+  -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id":"YOUR_REQUEST_ID_HERE",
+    "type":"inaccurate",
+    "description":"The response contained incorrect information about X",
+    "severity":"standard"
+  }' | python3 -m json.tool
+```
+
+## Adding New Models
+
+To add a new model or provider to the routing pool:
+
+### Required Files
+
+**1. `agent/app.py`** — Three changes:
+
+```python
+# Add cost (per 1K input tokens)
+MODEL_COSTS = {
+    ...
+    "us.your-new-model-id": 0.005,
+}
+
+# Add to the appropriate tier(s)
+DEFAULT_MODEL_TIERS = {
+    "moderate": [
+        ...,
+        "us.your-new-model-id",
+    ],
+}
+
+# Add AppConfig flag mapping (in AppConfigManager.is_model_enabled)
+model_flag_map = {
+    ...
+    "us.your-new-model-id": "enable_new_model",
+}
+```
+
+**2. `terraform/appconfig.tf`** — Add a feature flag:
+
+```hcl
+# In flags:
+enable_new_model = {
+  name = "Enable New Model"
+  attributes = { enabled = { constraints = { type = "boolean" } } }
+}
+
+# In values:
+enable_new_model = { enabled = true }
+```
+
+**3. `terraform/iam.tf`** — Usually no change needed (wildcards cover all Bedrock inference profiles). Only needed for non-Bedrock providers.
+
+### Recommended Files
+
+**4. `lambda/transparency_api/index.py`** — Add to `MODEL_INFO` dict for `GET /v1/models/info`
+
+**5. `terraform/governance.tf`** — Add to `model_cards_index` S3 object for ISO 42001 documentation
+
+### After Changes
+
+```bash
+# Rebuild agent image
+docker build --platform linux/arm64 -t $(cd terraform && terraform output -raw ecr_repository_url):latest agent/
+docker push $(cd terraform && terraform output -raw ecr_repository_url):latest
+
+# Apply AppConfig flag changes
+cd terraform && terraform apply
+
+# Force runtime to pull new image
+terraform destroy -target=aws_bedrockagentcore_agent_runtime.router
+terraform apply
+```
+
+### Notes
+
+- Bedrock models use inference profile IDs (`us.` prefix for US region)
+- Find available profiles: `aws bedrock list-inference-profiles --region us-east-1`
+- Legacy/retired models will return `ResourceNotFoundException` — verify with a test invoke first
+- The Kinesis pipeline, weight adjuster, and audit logging work generically with any model ID
+
 ## Cleanup
 
 ```bash
