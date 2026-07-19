@@ -119,7 +119,8 @@ Client → API Gateway → API Proxy Lambda
     ├── deploy.sh                     # Full build + push + apply (two-phase)
     ├── get-token.sh                  # Get Cognito auth token + quick test
     ├── run-tests.sh                  # Comprehensive test suite (26 tests)
-    └── test-async.sh                 # Async request test (submit + poll + display)
+    ├── test-async.sh                 # Async request test (submit + poll + display)
+    └── view-audit-log.py             # View provenance records from DynamoDB
 ```
 
 ## Prerequisites
@@ -685,6 +686,15 @@ curl -s -i -X POST "$API_URL/v1/chat/completions" \
 ```bash
 curl -s -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
   "$API_URL/v1/audit/my-requests" | python3 -m json.tool
+```
+
+### View Audit Log (Admin — DynamoDB direct)
+
+```bash
+# Human-readable view of recent provenance records
+python3 scripts/view-audit-log.py          # Last 5 records
+python3 scripts/view-audit-log.py 10       # Last 10 records
+python3 scripts/view-audit-log.py --full   # Include model scores + AppConfig state
 ```
 
 ### See Available Models
