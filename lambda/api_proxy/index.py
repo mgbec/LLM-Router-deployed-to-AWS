@@ -157,6 +157,15 @@ def _chat_completions(event: dict) -> dict:
         routing_hints = body.get("routing", {})
         request_id = event.get("headers", {}).get("x-request-id", str(uuid.uuid4()))
 
+        # Extract user_id from JWT claims (Cognito sub)
+        user_id = (
+            event.get("requestContext", {})
+            .get("authorizer", {})
+            .get("jwt", {})
+            .get("claims", {})
+            .get("sub", "anonymous")
+        )
+
         if not messages:
             return {
                 "statusCode": 400,
@@ -168,7 +177,8 @@ def _chat_completions(event: dict) -> dict:
             "prompt": messages[-1].get("content", "") if messages else "",
             "messages": messages,
             "routing": routing_hints,
-            "request_id": request_id
+            "request_id": request_id,
+            "user_id": user_id,
         }
 
         # Determine if this should be async:

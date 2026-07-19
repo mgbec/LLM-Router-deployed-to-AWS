@@ -118,7 +118,8 @@ Client → API Gateway → API Proxy Lambda
 └── scripts/
     ├── deploy.sh                     # Full build + push + apply (two-phase)
     ├── get-token.sh                  # Get Cognito auth token + quick test
-    └── run-tests.sh                  # Comprehensive test suite (26 tests)
+    ├── run-tests.sh                  # Comprehensive test suite (26 tests)
+    └── test-async.sh                 # Async request test (submit + poll + display)
 ```
 
 ## Prerequisites
@@ -488,6 +489,12 @@ export LLM_ROUTER_TOKEN="<your-access-token>"
 ./scripts/run-tests.sh
 ```
 
+**Note**: Tokens expire after 1 hour. If tests fail with 401 errors, your cached token has expired:
+```bash
+unset LLM_ROUTER_TOKEN
+./scripts/run-tests.sh
+```
+
 ## Configuration
 
 Key settings in `terraform/variables.tf`:
@@ -627,13 +634,22 @@ curl -s -X POST "$API_URL/v1/chat/completions" \
   -H "Authorization: Bearer $LLM_ROUTER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "messages":[{"role":"user","content":"Review this architecture for security vulnerabilities."}],
+    "messages":[{"role":"user","content":"Explain the CAP theorem and its implications for distributed database design."}],
     "routing":{"policy":"enterprise"}
   }' | python3 -m json.tool
 ```
 
 ### Async Request (for complex/long-running tasks)
 
+```bash
+# Use the dedicated async test script (submits, polls, displays result)
+./scripts/test-async.sh
+
+# Or with a custom prompt:
+./scripts/test-async.sh "Design a REST API for a banking system with account management, transfers, and audit logging."
+```
+
+Manual approach:
 ```bash
 # Submit async request
 RESPONSE=$(curl -s -X POST "$API_URL/v1/chat/completions" \
