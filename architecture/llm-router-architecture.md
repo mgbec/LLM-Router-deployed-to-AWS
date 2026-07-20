@@ -508,10 +508,11 @@ Versioned, encrypted S3 bucket containing:
 | A.3 Organization | ✔️ | Concern reporting API, RACI in policy docs |
 | A.5 Impact Assessment | ✔️ | Risk register, impact assessment in S3 |
 | A.6 Lifecycle | ✔️ | Deployment controls, monitoring, model cards |
-| A.7 Data | ✔️ | Data classification engine, flow log, guardrails |
+| A.7 Data | ✔️ | Data classification engine, flow log, provenance, guardrails |
 | A.8 Transparency | ✔️ | Explain API, audit log, mandatory headers |
 | A.9 Use | ✔️ | Kill switch, human override, content guardrails |
 | A.10 Third-Party | ✔️ | External routing guardrail, provider assessment docs |
+| Clause 9 Audit | ✔️ | Read-only auditor IAM role with access to all compliance evidence |
 
 ---
 

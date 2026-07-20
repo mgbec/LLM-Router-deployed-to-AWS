@@ -105,6 +105,7 @@ class GatewayClient:
         credentials = self._session.get_credentials().get_frozen_credentials()
         request = AWSRequest(method=method, url=url, data=body, headers={
             "Content-Type": "application/json",
+            "Accept": "application/json",
         })
         SigV4Auth(credentials, "bedrock-agentcore", self.region).add_auth(request)
         return dict(request.headers)
@@ -112,6 +113,7 @@ class GatewayClient:
     def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """
         Invoke a tool via the AgentCore Gateway MCP endpoint.
+        Tool names in the gateway are prefixed with target name: {target}___{tool}
         Returns the tool result or raises an exception.
         """
         if not self.gateway_url:
@@ -121,19 +123,29 @@ class GatewayClient:
         import urllib.request
         import urllib.error
 
-        # MCP tools/call request format
+        # Map short tool names to gateway-qualified names (target___tool)
+        TOOL_NAME_MAP = {
+            "classify_complexity": "complexity-classifier___classify_complexity",
+            "classify_data_sensitivity": "data-classifier___classify_data_sensitivity",
+            "record_feedback": "feedback-collector___record_feedback",
+            "invoke_model": "model-invoker___invoke_model",
+        }
+
+        qualified_name = TOOL_NAME_MAP.get(tool_name, tool_name)
+
+        # MCP tools/call request format (JSON-RPC 2.0)
         mcp_request = {
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
-                "name": tool_name,
+                "name": qualified_name,
                 "arguments": arguments,
             },
-            "id": f"req-{int(time.time()*1000)}",
+            "id": str(int(time.time() * 1000)),
         }
 
         body = json.dumps(mcp_request).encode("utf-8")
-        url = f"{self.gateway_url}/mcp"
+        url = f"{self.gateway_url}/mcp"  # Gateway MCP endpoint
 
         try:
             headers = self._get_signed_headers("POST", url, body)
@@ -155,8 +167,13 @@ class GatewayClient:
                     return {"error": result["error"]}
                 return result
         except urllib.error.HTTPError as e:
-            logger.warning(f"Gateway HTTP error calling {tool_name}: {e.code} {e.reason}")
-            return {"error": f"HTTP {e.code}: {e.reason}"}
+            body_text = ""
+            try:
+                body_text = e.read().decode("utf-8")[:200]
+            except Exception:
+                pass
+            logger.warning(f"Gateway HTTP error calling {tool_name}: {e.code} {e.reason} {body_text}")
+            return {"error": f"HTTP {e.code}: {e.reason}", "detail": body_text}
         except Exception as e:
             logger.warning(f"Gateway call failed for {tool_name}: {e}")
             return {"error": str(e)}
@@ -897,21 +914,24 @@ async def invoke(request: Request):
         except Exception:
             pass  # Non-critical
 
-        # Step 7: Record feedback via Gateway (non-blocking)
-        try:
-            gateway.call_tool("record_feedback", {
-                "request_id": request_id,
-                "model_id": selected_model,
-                "latency_ms": round(latency_ms, 2),
-                "quality_score": 0.0,  # Will be updated by user feedback later
-                "cost": MODEL_COSTS.get(selected_model, 0),
-                "escalated": False,
-            })
-        except Exception:
-            pass  # Non-critical
+        # Step 7: Record feedback via Gateway (fire-and-forget, non-blocking)
+        import threading
+        def _async_feedback():
+            try:
+                gateway.call_tool("record_feedback", {
+                    "request_id": request_id,
+                    "model_id": selected_model,
+                    "latency_ms": round(latency_ms, 2),
+                    "quality_score": 0.0,
+                    "cost": MODEL_COSTS.get(selected_model, 0),
+                    "escalated": False,
+                })
+            except Exception:
+                pass
+        threading.Thread(target=_async_feedback, daemon=True).start()
 
-        # Step 8: Write provenance record to audit log (ISO 42001 A.7.6)
-        _write_provenance(
+        # Step 8: Write provenance record to audit log (ISO 42001 A.7.6) - non-blocking
+        _prov_args = dict(
             request_id=request_id,
             user_id=body.get("user_id", ""),
             session_id=body.get("session_id", ""),
@@ -929,6 +949,7 @@ async def invoke(request: Request):
             escalated=False,
             is_async=False,
         )
+        threading.Thread(target=_write_provenance, kwargs=_prov_args, daemon=True).start()
 
         return JSONResponse(content={
             "content": output_text,

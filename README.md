@@ -49,7 +49,7 @@ Client → API Gateway → API Proxy Lambda
      └──────────────────┴─────────────────────┘
 ```
 
-The Router Agent container calls tools via the **AgentCore Gateway** using MCP protocol for centralized observability. Model invocations go directly to Bedrock for performance. If the gateway is unavailable, the agent falls back to direct calls.
+The Router Agent container calls tools via the **AgentCore Gateway** using MCP protocol for centralized observability. The gateway is a fully managed MCP server — no separate MCP server to deploy. Model invocations go directly to Bedrock for performance. If the gateway is unavailable, the agent falls back to direct calls. See `architecture/gateway-mcp.md` for full details.
 
 ## Key Features
 
@@ -771,6 +771,40 @@ curl -s -X POST "$API_URL/v1/concerns/report" \
   }' | python3 -m json.tool
 ```
 
+## Auditor Access (ISO 42001)
+
+A read-only IAM role is provisioned for auditors conducting ISO 42001 compliance reviews:
+
+```bash
+# Get the auditor role ARN
+terraform output auditor_role_arn
+```
+
+**What auditors can access:**
+- DynamoDB: Routing audit log, data flow log, human review queue, routing policies/metrics
+- S3: Governance docs (AI Policy, Risk Register, Impact Assessment, Model Cards)
+- CloudWatch: Dashboards, metrics, alarms, Lambda logs
+- X-Ray: Distributed traces
+- AppConfig: Feature flag configuration state
+- AgentCore: Runtime and gateway status
+- SQS/SNS: Concerns queue attributes
+
+**What auditors cannot do:**
+- Modify any resources
+- Invoke models or the router
+- Access raw user prompts (only hashed)
+- Change routing policies or feature flags
+
+**Assuming the role:**
+```bash
+aws sts assume-role \
+  --role-arn $(cd terraform && terraform output -raw auditor_role_arn) \
+  --role-session-name "iso42001-audit" \
+  --external-id "iso42001-audit-2026"
+```
+
+The `external_id` is configurable via `var.auditor_external_id` in Terraform.
+
 ## Adding New Models
 
 To add a new model or provider to the routing pool:
@@ -853,6 +887,7 @@ terraform destroy
 
 ## Known Limitations
 
+- **AgentCore Observability requires manual enablement**: After deploying, you must manually enable observability for the Runtime and Gateway in the AWS console. Go to Bedrock → AgentCore → Runtimes → select the runtime → enable observability. Same for Gateways. Terraform does not toggle this setting.
 - **Opus sync timeout**: Claude Opus takes >30s for complex prompts, exceeding API Gateway's limit. Complex requests are automatically dispatched async.
 - **AgentCore image updates**: Changing env vars triggers a new runtime version, but ECR image tag changes (`latest`) require destroy + recreate to force a pull.
 - **AppConfig polling**: Feature flag changes take up to 30 seconds to take effect (cache TTL).

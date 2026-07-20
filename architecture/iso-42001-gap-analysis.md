@@ -201,6 +201,51 @@ All items from the original "P1 — Must Address" list have been resolved:
 
 ---
 
+## Auditor Access Model
+
+A dedicated read-only IAM role (`llm-router-dev-auditor-role`) is provisioned for ISO 42001 compliance reviews. This supports Clause 9 (Performance Evaluation) requirements for internal audit.
+
+### What the Auditor Role Can Access
+
+| Resource | Access Level | ISO 42001 Relevance |
+|----------|-------------|---------------------|
+| Routing Audit Log (DynamoDB) | Read/Query/Scan | A.7.6 Data Provenance |
+| Data Flow Log (DynamoDB) | Read/Query/Scan | A.7.5 Data Acquisition |
+| Human Review Queue (DynamoDB) | Read/Query/Scan | A.9.5 Human Oversight |
+| Routing Policies (DynamoDB) | Read/Query | A.6.2.6 Operation |
+| Governance Docs (S3) | Read + List Versions | A.2.2 AI Policy, A.5 Impact Assessment |
+| CloudWatch Metrics/Dashboards | Read | A.6.2.6 Monitoring |
+| Lambda Logs | Read | A.6.2.6 Operation |
+| X-Ray Traces | Read | A.6.2.6 Tracing |
+| AppConfig State | Read | A.9.5 Human Oversight (kill switch state) |
+| AgentCore Status | Read | A.6.2.5 Deployment |
+| SQS/SNS Queue Attributes | Read | A.3.3 Concern Reporting |
+
+### What the Auditor Cannot Do
+
+- Modify any resources or configuration
+- Invoke models or send requests through the router
+- Access raw user prompts (only SHA-256 hashes stored)
+- Change routing policies, feature flags, or kill switch state
+- View secrets or credentials
+
+### Role Assumption
+
+```bash
+aws sts assume-role \
+  --role-arn <auditor_role_arn> \
+  --role-session-name "iso42001-audit" \
+  --external-id "iso42001-audit-2026"
+```
+
+The external ID is configurable via Terraform variable `auditor_external_id` and should be shared securely with the auditor.
+
+### Relevant Terraform
+
+- `terraform/auditor_role.tf` — Role definition and all policy attachments
+
+---
+
 ## References
 
 - [ISO/IEC 42001:2023 — AI Management Systems](https://www.iso.org/standard/42001)
