@@ -21,20 +21,20 @@ Client → API Gateway → API Proxy Lambda
               ▼                        ▼
      ┌────────────────┐        AgentCore Runtime
      │  Kill Switch   │               │
-     │  (AppConfig)   │               │
-     └────────┬───────┘               │
-              ▼                        ▼
-     ┌────────────────┐     ┌────────────────────┐
-     │  Complexity    │     │  Model Invocation   │
-     │  Classifier    │     │  (Opus for complex) │
-     │  (Nova Lite)   │     └────────────────────┘
-     └────────┬───────┘               │
-              ▼                        ▼
-     ┌────────────────┐        Result → DynamoDB
-     │  Model Select  │        Client polls GET /v1/requests/{id}
-     │  (AppConfig    │
-     │   filtered)    │
+     │  (AppConfig)   │               ▼
+     └────────┬───────┘        AgentCore Gateway (MCP)
+              ▼                        │
+     ┌────────────────┐               ▼
+     │  AgentCore     │        Model Invocation
+     │  Gateway (MCP) │
      └────────┬───────┘
+              │
+    ┌─────────┼─────────────────────────────┐
+    ▼         ▼              ▼              ▼
+ classify  classify_data  record       invoke_model
+ complexity sensitivity  feedback     (direct Bedrock)
+ (Lambda)   (Lambda)     (Lambda)
+              │
               ▼
      ┌────────────────────────────────────────┐
      │            Model Pool                   │
@@ -49,9 +49,12 @@ Client → API Gateway → API Proxy Lambda
      └──────────────────┴─────────────────────┘
 ```
 
+The Router Agent container calls tools via the **AgentCore Gateway** using MCP protocol for centralized observability. Model invocations go directly to Bedrock for performance. If the gateway is unavailable, the agent falls back to direct calls.
+
 ## Key Features
 
 - **Dynamic Complexity Routing**: Classifies prompts and routes to appropriately-sized models
+- **AgentCore Gateway Integration**: Tool calls (classify, data check, feedback) routed via MCP for centralized observability
 - **Auto Async Detection**: Complex requests automatically dispatch asynchronously (client polls for results)
 - **Hot-Swap via AppConfig**: Enable/disable models, adjust traffic splits, and activate kill switches without deployments
 - **ISO 42001 Compliance**: Content guardrails, PII protection, transparency APIs, human oversight, governance documentation
@@ -396,6 +399,56 @@ curl -X POST "https://your-api/v1/admin/override" \
 |---|---|---|
 | dev | Instant (0 min) | Manual |
 | prod | 10 min linear (20% increments) | Auto on CloudWatch alarm |
+
+## Data Classification & Residency (ISO 42001 A.7.5)
+
+When external providers are enabled, a data classification step runs before routing to non-AWS models. This prevents PII and sensitive data from leaving your AWS boundary.
+
+### When It Triggers
+
+- Only when the selected model is an external provider OR `enable_external_providers = true`
+- With only Bedrock models (current default), this step is a no-op
+
+### What It Does
+
+```
+User prompt: "My SSN is 123-45-6789, can you help me with..."
+                    │
+                    ▼
+    Gateway → data_classifier Lambda (via MCP)
+                    │
+                    ├── Regex scan: emails, phones, SSNs, credit cards, AWS keys
+                    ├── Domain keyword scan: health, financial, legal content
+                    ├── Bedrock Guardrails: deep PII detection
+                    │
+                    ▼
+              Decision: BLOCK external routing
+              Reason: "pii detected"
+                    │
+                    ▼
+    Agent overrides selected model → forces internal (Bedrock)
+    Result: Prompt stays within AWS, never sent to external provider
+```
+
+### Data Flow Log
+
+Every classification decision is logged to the `data-flow-log` DynamoDB table:
+- What was detected (PII categories, patterns)
+- Whether routing was allowed or blocked
+- Target provider that was evaluated
+- 90-day retention for audit
+
+### Enabling External Providers
+
+To activate external routing (and thus data classification enforcement):
+
+```hcl
+# terraform.tfvars
+enable_external_providers = true
+openai_api_key = "sk-..."
+```
+
+Then add external models to the tiers in `agent/app.py` and the data classification step will automatically enforce residency rules.
 
 ## ISO 42001 Compliance
 

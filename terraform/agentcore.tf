@@ -103,14 +103,7 @@ resource "aws_bedrockagentcore_gateway" "router" {
   description = "LLM Router Gateway - routes to tools, models, and external providers"
   role_arn    = aws_iam_role.agentcore_gateway.arn
 
-  authorizer_type = "CUSTOM_JWT"
-
-  authorizer_configuration {
-    custom_jwt_authorizer {
-      discovery_url   = "https://cognito-idp.${local.region}.amazonaws.com/${aws_cognito_user_pool.router.id}/.well-known/openid-configuration"
-      allowed_clients = [aws_cognito_user_pool_client.router_m2m.id]
-    }
-  }
+  authorizer_type = "AWS_IAM"
 
   protocol_configuration {
     mcp {

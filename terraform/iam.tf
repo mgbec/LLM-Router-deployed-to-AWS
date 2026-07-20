@@ -125,6 +125,18 @@ resource "aws_iam_role_policy" "agentcore_runtime_dynamodb" {
         Resource = [
           aws_dynamodb_table.routing_audit_log.arn
         ]
+      },
+      {
+        Sid    = "InvokeGateway"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:InvokeGateway",
+          "bedrock-agentcore:*"
+        ]
+        Resource = [
+          aws_bedrockagentcore_gateway.router.gateway_arn,
+          "${aws_bedrockagentcore_gateway.router.gateway_arn}/*"
+        ]
       }
     ]
   })

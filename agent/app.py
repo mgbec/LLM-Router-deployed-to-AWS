@@ -30,6 +30,7 @@ GUARDRAIL_ID = os.environ.get("GUARDRAIL_ID", "")
 GUARDRAIL_VERSION = os.environ.get("GUARDRAIL_VERSION", "DRAFT")
 AUDIT_LOG_TABLE = os.environ.get("AUDIT_LOG_TABLE", "")
 KILL_SWITCH_PROFILE = os.environ.get("KILL_SWITCH_PROFILE", "")
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "")
 
 # AWS clients
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
@@ -40,6 +41,92 @@ cloudwatch = boto3.client("cloudwatch", region_name=REGION)
 
 # Tables
 policy_table = dynamodb.Table(POLICY_TABLE) if POLICY_TABLE else None
+
+
+# =============================================================================
+# AgentCore Gateway Client (MCP Tool Invocation)
+# =============================================================================
+
+class GatewayClient:
+    """
+    Calls tools registered on the AgentCore Gateway via MCP protocol.
+    This routes tool calls through the gateway for centralized observability,
+    auth, and tool discovery.
+    """
+
+    def __init__(self, gateway_url: str, region: str):
+        self.gateway_url = gateway_url
+        self.region = region
+        self._session = boto3.Session()
+        self._credentials = None
+
+    def _get_signed_headers(self, method: str, url: str, body: bytes) -> dict:
+        """Sign request with SigV4 for gateway IAM auth."""
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
+        credentials = self._session.get_credentials().get_frozen_credentials()
+        request = AWSRequest(method=method, url=url, data=body, headers={
+            "Content-Type": "application/json",
+        })
+        SigV4Auth(credentials, "bedrock-agentcore", self.region).add_auth(request)
+        return dict(request.headers)
+
+    def call_tool(self, tool_name: str, arguments: dict) -> dict:
+        """
+        Invoke a tool via the AgentCore Gateway MCP endpoint.
+        Returns the tool result or raises an exception.
+        """
+        if not self.gateway_url:
+            logger.warning("Gateway URL not configured, skipping gateway call")
+            return {"error": "gateway not configured"}
+
+        import urllib.request
+        import urllib.error
+
+        # MCP tools/call request format
+        mcp_request = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments,
+            },
+            "id": f"req-{int(time.time()*1000)}",
+        }
+
+        body = json.dumps(mcp_request).encode("utf-8")
+        url = f"{self.gateway_url}/mcp"
+
+        try:
+            headers = self._get_signed_headers("POST", url, body)
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+                # MCP response format
+                if "result" in result:
+                    content = result["result"].get("content", [])
+                    if content and isinstance(content, list):
+                        text = content[0].get("text", "")
+                        try:
+                            return json.loads(text)
+                        except json.JSONDecodeError:
+                            return {"raw": text}
+                    return result["result"]
+                elif "error" in result:
+                    logger.warning(f"Gateway tool error: {result['error']}")
+                    return {"error": result["error"]}
+                return result
+        except urllib.error.HTTPError as e:
+            logger.warning(f"Gateway HTTP error calling {tool_name}: {e.code} {e.reason}")
+            return {"error": f"HTTP {e.code}: {e.reason}"}
+        except Exception as e:
+            logger.warning(f"Gateway call failed for {tool_name}: {e}")
+            return {"error": str(e)}
+
+
+# Initialize gateway client
+gateway = GatewayClient(GATEWAY_URL, REGION)
 
 # Model cost table (per 1K input tokens)
 MODEL_COSTS = {
@@ -616,27 +703,37 @@ async def invoke(request: Request):
         prompt = messages[-1].get("content", "")
 
     try:
-        # Step 1: Classify complexity
+        # Step 1: Classify complexity (via Gateway tool or direct fallback)
         complexity = _quick_classify(prompt)
         classification_method = "heuristic"
         
         if not complexity:
-            # Use Nova Lite for classification
+            # Try gateway tool first (for observability)
             try:
-                classification_prompt = f"Classify this prompt's complexity as exactly one of: simple, moderate, complex, specialized. Respond with ONLY the word.\n\nPrompt: {prompt[:2000]}\n\nClassification:"
-                cls_response = bedrock.converse(
-                    modelId=CLASSIFIER_MODEL_ID,
-                    messages=[{"role": "user", "content": [{"text": classification_prompt}]}],
-                    inferenceConfig={"maxTokens": 10, "temperature": 0.0}
-                )
-                raw = cls_response["output"]["message"]["content"][0]["text"].strip().lower()
-                valid = {"simple", "moderate", "complex", "specialized"}
-                complexity = raw if raw in valid else "moderate"
-                classification_method = "model"
-            except Exception as cls_err:
-                logger.warning(f"Classification failed: {cls_err}, defaulting to moderate")
-                complexity = "moderate"
-                classification_method = "fallback"
+                gw_result = gateway.call_tool("classify_complexity", {"prompt": prompt[:2000]})
+                if "error" not in gw_result and "complexity" in gw_result:
+                    complexity = gw_result["complexity"]
+                    classification_method = "gateway"
+                else:
+                    raise ValueError(gw_result.get("error", "no complexity in response"))
+            except Exception as gw_err:
+                # Fallback: call Bedrock directly
+                logger.info(f"Gateway classify fallback (reason: {gw_err})")
+                try:
+                    classification_prompt = f"Classify this prompt's complexity as exactly one of: simple, moderate, complex, specialized. Respond with ONLY the word.\n\nPrompt: {prompt[:2000]}\n\nClassification:"
+                    cls_response = bedrock.converse(
+                        modelId=CLASSIFIER_MODEL_ID,
+                        messages=[{"role": "user", "content": [{"text": classification_prompt}]}],
+                        inferenceConfig={"maxTokens": 10, "temperature": 0.0}
+                    )
+                    raw = cls_response["output"]["message"]["content"][0]["text"].strip().lower()
+                    valid = {"simple", "moderate", "complex", "specialized"}
+                    complexity = raw if raw in valid else "moderate"
+                    classification_method = "model_direct"
+                except Exception as cls_err:
+                    logger.warning(f"Classification failed: {cls_err}, defaulting to moderate")
+                    complexity = "moderate"
+                    classification_method = "fallback"
 
         # Step 2: Check kill switch
         if not config_manager.is_system_active():
@@ -676,7 +773,22 @@ async def invoke(request: Request):
         
         selected_model = affordable[0]
 
-        # Step 3: Invoke the selected model
+        # Step 4: Data classification check via Gateway (for external providers)
+        if "external" in selected_model or ENABLE_EXTERNAL:
+            try:
+                dc_result = gateway.call_tool("classify_data_sensitivity", {
+                    "prompt": prompt[:2000],
+                    "target_provider": "external",
+                    "request_id": request_id,
+                })
+                if dc_result.get("routing_allowed") is False:
+                    # PII detected, force internal model
+                    logger.info(f"Data classification blocked external routing: {dc_result.get('reason')}")
+                    selected_model = DEFAULT_FALLBACK_MODEL
+            except Exception as dc_err:
+                logger.warning(f"Data classification gateway call failed: {dc_err}")
+
+        # Step 5: Invoke the selected model
         start_time = time.time()
         
         bedrock_messages = []
@@ -713,7 +825,7 @@ async def invoke(request: Request):
 
         _record_success(selected_model)
 
-        # Step 4: Emit routing event (async, non-blocking)
+        # Step 6: Emit routing event (async, non-blocking)
         try:
             if KINESIS_STREAM:
                 kinesis.put_record(
@@ -731,7 +843,20 @@ async def invoke(request: Request):
         except Exception:
             pass  # Non-critical
 
-        # Step 5: Write provenance record to audit log (ISO 42001 A.7.6)
+        # Step 7: Record feedback via Gateway (non-blocking)
+        try:
+            gateway.call_tool("record_feedback", {
+                "request_id": request_id,
+                "model_id": selected_model,
+                "latency_ms": round(latency_ms, 2),
+                "quality_score": 0.0,  # Will be updated by user feedback later
+                "cost": MODEL_COSTS.get(selected_model, 0),
+                "escalated": False,
+            })
+        except Exception:
+            pass  # Non-critical
+
+        # Step 8: Write provenance record to audit log (ISO 42001 A.7.6)
         _write_provenance(
             request_id=request_id,
             user_id=body.get("user_id", ""),
