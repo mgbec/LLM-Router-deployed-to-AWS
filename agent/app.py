@@ -9,6 +9,43 @@ import time
 import logging
 from typing import Any
 
+# =============================================================================
+# OpenTelemetry Instrumentation
+# Must be initialized BEFORE boto3 clients are created
+# =============================================================================
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource
+
+# AgentCore sets OTEL_EXPORTER_OTLP_ENDPOINT automatically
+# If not set, traces go nowhere (safe fallback)
+OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+resource = Resource.create({
+    "service.name": "llm-router-agent",
+    "service.version": "1.0.0",
+    "deployment.environment": os.environ.get("ENVIRONMENT", "dev"),
+})
+
+provider = TracerProvider(resource=resource)
+
+if OTEL_ENDPOINT:
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    exporter = OTLPSpanExporter(endpoint=f"{OTEL_ENDPOINT}/v1/traces")
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer("llm-router")
+
+# Instrument botocore (covers all boto3 clients: bedrock, dynamodb, kinesis, etc.)
+from opentelemetry.instrumentation.botocore import BotocoreInstrumentor
+BotocoreInstrumentor().instrument()
+
+# Instrument FastAPI (covers incoming HTTP requests)
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 import boto3
 
 logging.basicConfig(level=logging.INFO)
@@ -681,6 +718,9 @@ import uvicorn
 
 app = FastAPI(title="LLM Router Agent")
 
+# Instrument FastAPI for incoming request tracing
+FastAPIInstrumentor.instrument_app(app)
+
 
 @app.post("/invocations")
 @app.post("/invoke")
@@ -704,36 +744,40 @@ async def invoke(request: Request):
 
     try:
         # Step 1: Classify complexity (via Gateway tool or direct fallback)
-        complexity = _quick_classify(prompt)
-        classification_method = "heuristic"
-        
-        if not complexity:
-            # Try gateway tool first (for observability)
-            try:
-                gw_result = gateway.call_tool("classify_complexity", {"prompt": prompt[:2000]})
-                if "error" not in gw_result and "complexity" in gw_result:
-                    complexity = gw_result["complexity"]
-                    classification_method = "gateway"
-                else:
-                    raise ValueError(gw_result.get("error", "no complexity in response"))
-            except Exception as gw_err:
-                # Fallback: call Bedrock directly
-                logger.info(f"Gateway classify fallback (reason: {gw_err})")
+        with tracer.start_as_current_span("classify_complexity") as span:
+            complexity = _quick_classify(prompt)
+            classification_method = "heuristic"
+            
+            if not complexity:
+                # Try gateway tool first (for observability)
                 try:
-                    classification_prompt = f"Classify this prompt's complexity as exactly one of: simple, moderate, complex, specialized. Respond with ONLY the word.\n\nPrompt: {prompt[:2000]}\n\nClassification:"
-                    cls_response = bedrock.converse(
-                        modelId=CLASSIFIER_MODEL_ID,
-                        messages=[{"role": "user", "content": [{"text": classification_prompt}]}],
-                        inferenceConfig={"maxTokens": 10, "temperature": 0.0}
-                    )
-                    raw = cls_response["output"]["message"]["content"][0]["text"].strip().lower()
-                    valid = {"simple", "moderate", "complex", "specialized"}
-                    complexity = raw if raw in valid else "moderate"
-                    classification_method = "model_direct"
-                except Exception as cls_err:
-                    logger.warning(f"Classification failed: {cls_err}, defaulting to moderate")
-                    complexity = "moderate"
-                    classification_method = "fallback"
+                    gw_result = gateway.call_tool("classify_complexity", {"prompt": prompt[:2000]})
+                    if "error" not in gw_result and "complexity" in gw_result:
+                        complexity = gw_result["complexity"]
+                        classification_method = "gateway"
+                    else:
+                        raise ValueError(gw_result.get("error", "no complexity in response"))
+                except Exception as gw_err:
+                    # Fallback: call Bedrock directly
+                    logger.info(f"Gateway classify fallback (reason: {gw_err})")
+                    try:
+                        classification_prompt = f"Classify this prompt's complexity as exactly one of: simple, moderate, complex, specialized. Respond with ONLY the word.\n\nPrompt: {prompt[:2000]}\n\nClassification:"
+                        cls_response = bedrock.converse(
+                            modelId=CLASSIFIER_MODEL_ID,
+                            messages=[{"role": "user", "content": [{"text": classification_prompt}]}],
+                            inferenceConfig={"maxTokens": 10, "temperature": 0.0}
+                        )
+                        raw = cls_response["output"]["message"]["content"][0]["text"].strip().lower()
+                        valid = {"simple", "moderate", "complex", "specialized"}
+                        complexity = raw if raw in valid else "moderate"
+                        classification_method = "model_direct"
+                    except Exception as cls_err:
+                        logger.warning(f"Classification failed: {cls_err}, defaulting to moderate")
+                        complexity = "moderate"
+                        classification_method = "fallback"
+
+            span.set_attribute("routing.complexity", complexity)
+            span.set_attribute("routing.classification_method", classification_method)
 
         # Step 2: Check kill switch
         if not config_manager.is_system_active():
@@ -789,41 +833,51 @@ async def invoke(request: Request):
                 logger.warning(f"Data classification gateway call failed: {dc_err}")
 
         # Step 5: Invoke the selected model
-        start_time = time.time()
-        
-        bedrock_messages = []
-        system_prompts = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_prompts.append({"text": msg["content"]})
-            else:
-                bedrock_messages.append({
-                    "role": msg["role"],
-                    "content": [{"text": msg["content"]}]
-                })
-        
-        if not bedrock_messages:
-            bedrock_messages = [{"role": "user", "content": [{"text": prompt}]}]
+        with tracer.start_as_current_span("invoke_model") as span:
+            span.set_attribute("model.id", selected_model)
+            span.set_attribute("model.provider", "bedrock")
+            span.set_attribute("routing.complexity", complexity)
+            span.set_attribute("routing.policy", policy_id)
 
-        # Limit tokens for sync requests to avoid timeouts
-        # Complex/Opus can use more tokens in async mode
-        max_tokens = 2048 if complexity in ("complex", "specialized") else 4096
+            start_time = time.time()
+            
+            bedrock_messages = []
+            system_prompts = []
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_prompts.append({"text": msg["content"]})
+                else:
+                    bedrock_messages.append({
+                        "role": msg["role"],
+                        "content": [{"text": msg["content"]}]
+                    })
+            
+            if not bedrock_messages:
+                bedrock_messages = [{"role": "user", "content": [{"text": prompt}]}]
 
-        invoke_params = {
-            "modelId": selected_model,
-            "messages": bedrock_messages,
-            "inferenceConfig": {"maxTokens": max_tokens, "temperature": 0.7}
-        }
-        if system_prompts:
-            invoke_params["system"] = system_prompts
+            # Limit tokens for sync requests to avoid timeouts
+            # Complex/Opus can use more tokens in async mode
+            max_tokens = 2048 if complexity in ("complex", "specialized") else 4096
 
-        response = bedrock.converse(**invoke_params)
-        
-        output_text = response["output"]["message"]["content"][0]["text"]
-        usage = response.get("usage", {})
-        latency_ms = (time.time() - start_time) * 1000
+            invoke_params = {
+                "modelId": selected_model,
+                "messages": bedrock_messages,
+                "inferenceConfig": {"maxTokens": max_tokens, "temperature": 0.7}
+            }
+            if system_prompts:
+                invoke_params["system"] = system_prompts
 
-        _record_success(selected_model)
+            response = bedrock.converse(**invoke_params)
+            
+            output_text = response["output"]["message"]["content"][0]["text"]
+            usage = response.get("usage", {})
+            latency_ms = (time.time() - start_time) * 1000
+
+            span.set_attribute("model.latency_ms", round(latency_ms, 2))
+            span.set_attribute("model.input_tokens", usage.get("inputTokens", 0))
+            span.set_attribute("model.output_tokens", usage.get("outputTokens", 0))
+
+            _record_success(selected_model)
 
         # Step 6: Emit routing event (async, non-blocking)
         try:
