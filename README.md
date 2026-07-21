@@ -69,7 +69,10 @@ The Router Agent container calls tools via the **AgentCore Gateway** using MCP p
 ```
 ├── architecture/
 │   ├── llm-router-architecture.md    # Full system design
-│   └── iso-42001-gap-analysis.md     # ISO 42001 compliance analysis
+│   ├── iso-42001-gap-analysis.md     # ISO 42001 compliance analysis
+│   ├── async-processing.md           # Async polling pattern details
+│   ├── gateway-mcp.md               # Gateway & MCP protocol explanation
+│   └── diagrams.md                   # Mermaid diagrams (render on GitHub)
 ├── terraform/
 │   ├── main.tf                       # Provider config, locals
 │   ├── variables.tf                  # Input variables
@@ -118,6 +121,9 @@ The Router Agent container calls tools via the **AgentCore Gateway** using MCP p
 │   │       └── RoutingBadge.jsx      # Model/complexity/latency badges
 │   ├── package.json
 │   └── vite.config.js
+├── diagrams/                          # Architecture diagram generator
+│   ├── generate.py                   # Python Diagrams script (AWS icons → PNG)
+│   └── requirements.txt              # pip install diagrams
 └── scripts/
     ├── deploy.sh                     # Full build + push + apply (two-phase)
     ├── get-token.sh                  # Get Cognito auth token + quick test

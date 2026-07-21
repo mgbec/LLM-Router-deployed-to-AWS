@@ -297,98 +297,16 @@ Using AWS AppConfig with feature flags, you can:
 
 ---
 
-## Infrastructure (CDK Sketch)
+## Infrastructure
 
-```typescript
-import * as cdk from 'aws-cdk-lib';
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as kinesis from 'aws-cdk-lib/aws-kinesis';
-import * as agentcore from 'aws-cdk-lib/aws-bedrock-agentcore';
+The system is fully implemented in Terraform (AWS provider 6.54.0). See the `terraform/` directory for all resource definitions. Key files:
 
-export class LlmRouterStack extends cdk.Stack {
-  constructor(scope: cdk.App, id: string) {
-    super(scope, id);
-
-    // Router Agent Runtime
-    const routerRuntime = new agentcore.Runtime(this, 'RouterAgentRuntime', {
-      image: 'router-agent:latest',  // Container with routing logic
-      memory: 512,
-      timeout: cdk.Duration.seconds(60),
-      scaling: {
-        minInstances: 2,
-        maxInstances: 50,
-        targetConcurrency: 10,
-      },
-    });
-
-    // AgentCore Gateway with inference targets
-    const gateway = new agentcore.Gateway(this, 'LlmRouterGateway', {
-      targets: [
-        // Bedrock models (native)
-        {
-          type: 'inference',
-          name: 'bedrock-claude-opus',
-          modelId: 'anthropic.claude-opus-4-20250514',
-        },
-        {
-          type: 'inference',
-          name: 'bedrock-claude-sonnet',
-          modelId: 'anthropic.claude-sonnet-4-20250514',
-        },
-        {
-          type: 'inference',
-          name: 'bedrock-nova-pro',
-          modelId: 'amazon.nova-pro-v1:0',
-        },
-        {
-          type: 'inference',
-          name: 'bedrock-nova-lite',
-          modelId: 'amazon.nova-lite-v1:0',
-        },
-        // SageMaker endpoint (self-hosted)
-        {
-          type: 'http',
-          name: 'sagemaker-custom',
-          endpoint: 'https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/custom-model/invocations',
-          auth: { type: 'iam' },
-        },
-        // External provider (API key via credential exchange)
-        {
-          type: 'http',
-          name: 'external-openai',
-          endpoint: 'https://api.openai.com/v1/chat/completions',
-          auth: { type: 'api-key', secretArn: 'arn:aws:secretsmanager:us-east-1:123456789:secret:openai-key' },
-        },
-        // Router Agent itself
-        {
-          type: 'agentcore-runtime',
-          name: 'router-agent',
-          runtime: routerRuntime,
-        },
-      ],
-      authentication: {
-        ingress: { type: 'iam' },
-      },
-    });
-
-    // Memory for session state
-    const memory = new agentcore.Memory(this, 'RouterMemory', {
-      retentionDays: 7,
-    });
-
-    // Policy store
-    const policyTable = new dynamodb.Table(this, 'RoutingPolicies', {
-      partitionKey: { name: 'policyId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-    });
-
-    // Metrics & feedback pipeline
-    const routingStream = new kinesis.Stream(this, 'RoutingEvents', {
-      shardCount: 2,
-    });
-  }
-}
-```
+- `agentcore.tf` — Runtime, Gateway, and Gateway Targets
+- `async_processing.tf` — Async request handling (DynamoDB + Lambda)
+- `appconfig.tf` — Hot-swap feature flags
+- `guardrails.tf` — Bedrock Guardrails (content + PII)
+- `iam.tf` — All IAM roles and policies
+- `auditor_role.tf` — Read-only auditor access for ISO 42001 reviews
 
 ---
 
